@@ -17,7 +17,7 @@ RULES = {
     "BL001": ("error", "manifest or samples fail schema, duplicate run id, or id differs from directory"),
     "BL002": ("error", "required file or README section missing, or Status has no date"),
     "BL003": ("error", "generated files out of date (run bench-kit render)"),
-    "BL004": ("error", "samples disagree with manifest (row count per subject or recomputed numbers)"),
+    "BL004": ("error", "samples disagree with manifest (row count per subject or recomputed numbers, task subsets included)"),
     "BL005": ("error", "SWITCH or WINNER verdict not backed by stats"),
     "BL006": ("error", "em or en dash"),
     "BL007": ("warning", "model id is an alias, or subject version missing without reason"),
@@ -214,13 +214,14 @@ class Linter:
                     if not got_sd:
                         self.add("BL004", r.manifest_path, f"evaluation_results.{s}.{mid} missing; run bench-kit stats")
                         continue
-                    for label, a, b in _pairs(got_sd, want_sd):
+                    for label, a, b in _pairs(got_sd, want_sd, counts=stats.is_subset_metric(mcfg.get(mid) or {})):
                         if not _close(a, b):
                             self.add("BL004", r.manifest_path, f"evaluation_results.{s}.{mid}.{label} is {a}, samples give {b}; run bench-kit stats")
             for i, (got_c, want_c) in enumerate(zip(m.get("comparisons") or [], fresh["comparisons"], strict=False)):
-                if not stats.computable(mcfg.get(got_c.get("metric_id"), {})):
+                mc = mcfg.get(got_c.get("metric_id"), {})
+                if not stats.computable(mc):
                     continue
-                for label, a, b in _pairs(got_c, want_c, diff=True):
+                for label, a, b in _pairs(got_c, want_c, diff=True, counts=stats.is_subset_metric(mc)):
                     if not _close(a, b):
                         self.add("BL004", r.manifest_path, f"comparisons[{i}].{label} is {a}, samples give {b}; run bench-kit stats")
             e = m.get("errors") or {}
@@ -321,9 +322,17 @@ def _close(a, b) -> bool:
     return abs(float(a) - float(b)) <= TOL
 
 
-def _pairs(got: dict, want: dict, diff: bool = False):
+def _pairs(got: dict, want: dict, diff: bool = False, counts: bool = False):
+    """Recomputed numbers to check. counts (metrics with a task_filter, field or missing rule) also checks
+    num_samples and, for evaluation results, the subset task and row counts."""
     key = "diff" if diff else "score"
     yield key, got.get(key), want.get(key)
+    if counts:
+        yield "num_samples", (got.get("uncertainty") or {}).get("num_samples"), (want.get("uncertainty") or {}).get("num_samples")
+        if not diff:
+            gs, ws = got.get("subset") or {}, want.get("subset") or {}
+            for k in ("tasks", "of", "rows_zeroed", "rows_excluded"):
+                yield f"subset.{k}", gs.get(k), ws.get(k)
     gci = (got.get("uncertainty") or {}).get("confidence_interval") or {}
     wci = (want.get("uncertainty") or {}).get("confidence_interval") or {}
     if wci or gci:

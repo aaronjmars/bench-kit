@@ -156,7 +156,33 @@
             "type": "object",
             "properties": {
               "from": {"enum": ["score", "is_correct", "pass_at_k", "pass_hat_k", "external"]},
-              "k": {"type": "integer", "minimum": 1}
+              "k": {"type": "integer", "minimum": 1},
+              "field": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*$",
+                "description": "Dotted path in each sample row holding the per-row value, e.g. 'metadata.recall'. Default: evaluation.score (from score) or evaluation.is_correct (rate metrics). bench-kit 0.4.0 or later."
+              },
+              "missing": {
+                "enum": ["zero", "excluded"],
+                "description": "Rows with no value: count as 0 (zero) or leave out (excluded). Unset: errored rows follow errors.counted_as, other rows are left out. bench-kit 0.4.0 or later."
+              }
+            }
+          },
+          "task_filter": {
+            "type": "object",
+            "description": "Compute this metric over a subset of the run's tasks: tasks whose rows carry field = equals (or a value in 'in'), and, with sample_ids, only the listed tasks. bench-kit 0.4.0 or later.",
+            "additionalProperties": false,
+            "properties": {
+              "field": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*$"},
+              "equals": {"type": ["string", "number", "boolean"]},
+              "in": {"type": "array", "minItems": 1, "items": {"type": ["string", "number", "boolean"]}},
+              "sample_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+            },
+            "anyOf": [{"required": ["field"]}, {"required": ["sample_ids"]}],
+            "dependencies": {
+              "field": {"oneOf": [{"required": ["equals"]}, {"required": ["in"]}]},
+              "equals": ["field"],
+              "in": ["field"]
             }
           }
         }
@@ -203,7 +229,18 @@
         "of": {"type": "integer", "minimum": 0},
         "by_source": {"type": "object", "additionalProperties": {"type": "integer"}},
         "counted_as": {"enum": ["zero", "excluded"]},
-        "note": {"type": ["string", "null"]}
+        "note": {"type": ["string", "null"]},
+        "subset": {
+          "type": "object",
+          "description": "Written by bench-kit stats for metrics with a task_filter, field or missing rule.",
+          "properties": {
+            "tasks": {"type": "integer", "minimum": 0, "description": "This subject's tasks the filter keeps"},
+            "of": {"type": "integer", "minimum": 0, "description": "This subject's tasks in the run"},
+            "rows_zeroed": {"type": "integer", "minimum": 0, "description": "Rows with no value, counted as 0"},
+            "rows_excluded": {"type": "integer", "minimum": 0, "description": "Rows with no value, left out"},
+            "filter": {"type": "string", "description": "Short text form of the task_filter"}
+          }
+        }
       }
     },
     "token_usage": {
@@ -290,7 +327,18 @@
         "score": {"type": ["number", "null"]},
         "per_repeat": {"type": "array", "items": {"type": ["number", "null"]}},
         "uncertainty": {"$ref": "#/definitions/uncertainty"},
-        "note": {"type": ["string", "null"]}
+        "note": {"type": ["string", "null"]},
+        "subset": {
+          "type": "object",
+          "description": "Written by bench-kit stats for metrics with a task_filter, field or missing rule.",
+          "properties": {
+            "tasks": {"type": "integer", "minimum": 0, "description": "This subject's tasks the filter keeps"},
+            "of": {"type": "integer", "minimum": 0, "description": "This subject's tasks in the run"},
+            "rows_zeroed": {"type": "integer", "minimum": 0, "description": "Rows with no value, counted as 0"},
+            "rows_excluded": {"type": "integer", "minimum": 0, "description": "Rows with no value, left out"},
+            "filter": {"type": "string", "description": "Short text form of the task_filter"}
+          }
+        }
       }
     },
     "token_usage": {

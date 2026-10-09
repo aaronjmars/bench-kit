@@ -1,4 +1,4 @@
-# Bench standard v2.2 (bench-kit 0.3.0)
+# Bench standard v2.3 (bench-kit 0.4.0)
 
 One shape for every bench repo: how runs are recorded, checked and reported,
 whatever the bench measures (models, agent harnesses, prompts, CI runners,
@@ -17,7 +17,13 @@ mapping. v2.2 (bench-kit 0.3.0) adds optional clustered intervals
 (`source_data.n_completed_by_subject`, `repeats.completed_by_subject`), an
 optional `output` on sample rows for single_turn EEE export, and
 significant-figure number formatting in generated files; every v2.1 manifest
-stays valid and keeps `bench-manifest/1`. Sources at the end.
+stays valid and keeps `bench-manifest/1`. v2.3 (bench-kit 0.4.0) adds optional
+per-metric task subsets (`metric_config.<id>.task_filter`,
+`metric_parameters.field`, `metric_parameters.missing`), so a metric such as
+recall over positive tasks or false alarms over clean controls is computed,
+paired and linted by bench-kit instead of by each bench; a metric without them
+works as before, and every v2.2 manifest stays valid as `bench-manifest/1`.
+Sources at the end.
 
 Note: every number, id and hash in the examples below is made up to show the
 shape. They are not results.
@@ -217,7 +223,7 @@ cost {usd, basis}, verdict, status. Everything else optional, filled when the
 bench has it.
 
 **Who fills what.** `bench-kit stats` owns: `evaluation_results` for metrics
-whose `metric_parameters.from` is not `external`, the numbers inside
+whose `metric_parameters.from` is not `external` (including `subset`), the numbers inside
 `comparisons` (diff, uncertainty, wins/ties/losses, sign_test_p), `errors.n`,
 `errors.of`, `errors.by_source`, and `token_usage`. Everything else is written
 by the run or a human. Metrics with `from: external` (e.g. precision over claims)
@@ -229,6 +235,56 @@ are written by the bench's own scorer and carried as is.
 - `pass_at_k` (with `k`): per task 1 - C(n-c, k) / C(n, k)
 - `pass_hat_k` (with `k`): per task C(c, k) / C(n, k) (tau2 pass^k)
 - `external`: not computed from samples (default)
+
+**Metric subsets** (optional, bench-kit 0.4.0). Some metrics only make sense on
+part of a run's tasks: recall only on tasks that have a known answer, false
+alarms only on clean controls. Three optional fields describe that, so
+`bench-kit stats` computes the value, interval and paired comparisons over just
+those tasks:
+
+```json
+"metric_config": {
+  "recall": {"metric_name": "Recall on positive tasks", "lower_is_better": false, "score_type": "continuous",
+             "min_score": 0, "max_score": 1,
+             "metric_parameters": {"from": "score", "missing": "zero"},
+             "task_filter": {"field": "metadata.kind", "equals": "positive"}},
+  "false_alarm": {"metric_name": "False alarms on clean controls", "lower_is_better": true, "score_type": "continuous",
+                  "min_score": 0, "max_score": 1,
+                  "metric_parameters": {"from": "score", "field": "metadata.false_alarm", "missing": "excluded"},
+                  "task_filter": {"field": "metadata.kind", "equals": "clean"}}
+}
+```
+
+- `task_filter` (in the metric_config entry, next to `metric_parameters`): which
+  tasks count. `{"field": <path>, "equals": <value>}` or `{"field": <path>,
+  "in": [<values>]}` keeps tasks whose rows carry that value at the dotted path
+  (e.g. `metadata.kind`); `{"sample_ids": [...]}` keeps the listed tasks; both
+  together keep tasks that pass both. The match is per task over all its rows
+  (every subject and repeat): rows without the value (e.g. errored rows) take
+  their task's value from its other rows, a task whose rows disagree is an
+  error, and a task with no value at all is left out.
+- `metric_parameters.field`: dotted path in each row that holds the per-row
+  value, e.g. `metadata.false_alarm`. Default `evaluation.score` (for `score`)
+  or `evaluation.is_correct` (for `is_correct`, `pass_at_k`, `pass_hat_k`, where
+  the value must be true/false or 0/1).
+- `metric_parameters.missing`: what a row with no value counts as: `zero` (0, or
+  not correct) or `excluded` (left out). Unset: an errored row follows
+  `errors.counted_as` and any other row is left out, as before. With
+  `errors.counted_as: excluded` errored rows are dropped first, whatever
+  `missing` says.
+- `bench-kit stats` writes `subset` into each result of such a metric:
+  `{"tasks", "of", "rows_zeroed", "rows_excluded", "filter"}` (this subject's
+  kept tasks, its tasks in the run, rows with no value counted as 0, rows with no
+  value left out, and the filter in short text). `uncertainty.num_samples` is
+  the number of kept tasks with a value. Comparisons on the metric pair only the
+  kept tasks. Render prints `(4 of 6 tasks; ...)` next to the number and a
+  `Metric subsets` line per run.
+- `export-eee` writes the filter into EEE `metric_parameters.task_filter` as its
+  short text (EEE parameters are scalars) and adds `n_tasks_in_subset`.
+- They apply only to metrics computed from samples (`from` is not `external`).
+- These fields need bench-kit 0.4.0 or later: older versions ignore them and
+  compute the metric over every task. Pin `aaronjmars/bench-kit@v0.4.0` (or later)
+  before writing them.
 
 **Fixed words**
 - `status`: complete | partial | failed | invalidated
@@ -368,6 +424,13 @@ comparison must list what differs (`compared_with`).
     gives no interval. `uncertainty.num_clusters` records G; W/T/L and the sign
     test stay per task. With every task in its own cluster this equals the
     unclustered t interval. Unset `cluster_by` (the default) changes nothing.
+12. Metric subsets (optional, section 4). A metric with a `task_filter` is
+    computed on the kept tasks only: per-task values, the interval (same rules
+    as above, with n = kept tasks that have a value), `per_repeat`, and every
+    paired comparison on that metric (W/T/L, sign test and `num_samples` over the
+    kept tasks both subjects have). Always read such a metric with its n; a
+    filter that keeps 2 tasks gives a very wide interval. Decide the filter
+    before the run, like the decision rule (rule 7): it is part of the metric.
 
 ## 8. Shared conventions
 
@@ -397,7 +460,7 @@ Rules (code, level):
 - BL001 error: manifest or samples fail JSON Schema, duplicate run id, or id differs from directory
 - BL002 error: required file or README section missing; Status has no date; latest markers missing
 - BL003 error: generated files out of date (render would change them)
-- BL004 error: samples row count per subject (section 5) or recomputed numbers disagree with the manifest, or stats cannot be computed (e.g. a task in two clusters)
+- BL004 error: samples row count per subject (section 5) or recomputed numbers disagree with the manifest (for metric subsets also `num_samples` and the `subset` counts), or stats cannot be computed (e.g. a task in two clusters, or two values for a `task_filter` field)
 - BL005 error: verdict SWITCH/WINNER without a primary-metric comparison whose CI excludes 0, or with repeats < 2
 - BL006 error: em or en dash in any markdown file or manifest
 - BL007 warn: model id is an alias, or harness version missing without `version_unknown_reason`

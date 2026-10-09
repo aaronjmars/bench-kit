@@ -10,6 +10,7 @@ from pathlib import Path
 
 from jsonschema import Draft7Validator
 
+from . import stats
 from .io import Run, load_schema
 
 EEE_VERSION = "0.3.0"
@@ -65,8 +66,12 @@ def metric_config(mid: str, m: dict) -> dict:
     if m["score_type"] == "continuous":
         out["min_score"] = m.get("min_score")
         out["max_score"] = m.get("max_score")
-    if m.get("metric_parameters"):
-        out["metric_parameters"] = m["metric_parameters"]
+    params = dict(m.get("metric_parameters") or {})
+    if m.get("task_filter"):
+        # EEE metric_parameters hold scalars only, so the filter travels as its short text form
+        params["task_filter"] = stats.filter_text(m)
+    if params:
+        out["metric_parameters"] = params
     return out
 
 
@@ -128,7 +133,11 @@ def export(run: Run, out_dir: Path, validate: bool = True, org: str | None = Non
                     "source_data": {
                         "dataset_name": sd_src.get("dataset_name", bench),
                         "source_type": "other",
-                        "additional_details": {"version": str(sd_src.get("version", "")), "n_tasks": str(sd_src.get("n_completed", ""))},
+                        "additional_details": {
+                            "version": str(sd_src.get("version", "")),
+                            "n_tasks": str(sd_src.get("n_completed", "")),
+                            **({"n_tasks_in_subset": str(sd["subset"].get("tasks"))} if sd.get("subset") else {}),
+                        },
                     },
                     "evaluation_timestamp": m.get("started_at"),
                     "metric_config": metric_config(mid, cfg),
