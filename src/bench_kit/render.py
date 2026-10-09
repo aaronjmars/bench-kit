@@ -6,6 +6,7 @@ import math
 import re
 from pathlib import Path
 
+from . import stats
 from .io import Run, discover
 
 START = "<!-- bench:latest:start -->"
@@ -77,12 +78,49 @@ def subject_label(s: dict) -> str:
     return " + ".join(parts) or s["name"]
 
 
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def subset_text(sd: dict) -> str:
+    """ " (4 of 6 tasks; 1 row with no value counted as 0)" for a metric computed over a task subset, else ""."""
+    sub = sd.get("subset")
+    if not sub:
+        return ""
+    parts = [f"{sub.get('tasks')} of {plural(sub.get('of') or 0, 'task')}"]
+    if sub.get("rows_zeroed"):
+        parts.append(f"{plural(sub['rows_zeroed'], 'row')} with no value counted as 0")
+    if sub.get("rows_excluded"):
+        parts.append(f"{plural(sub['rows_excluded'], 'row')} with no value left out")
+    return " (" + "; ".join(parts) + ")"
+
+
+def score_text(sd: dict) -> str:
+    return f"{num(sd.get('score'))}{ci_text(sd.get('uncertainty'))}{subset_text(sd)}"
+
+
+def subset_rule(cfg: dict) -> str:
+    """How a metric picks its tasks and values, e.g. "metadata.kind = clean, value from metadata.x, no value left out"."""
+    params = cfg.get("metric_parameters") or {}
+    parts = []
+    ft = stats.filter_text(cfg)
+    if ft:
+        parts.append(f"tasks where {ft}")
+    if params.get("field"):
+        parts.append(f"value from {params['field']}")
+    if params.get("missing") == "zero":
+        parts.append("no value counts as 0")
+    elif params.get("missing") == "excluded":
+        parts.append("rows with no value left out")
+    return ", ".join(parts)
+
+
 def primary_line(m: dict, s: str) -> str:
     pm = m.get("primary_metric")
     sd = (m.get("evaluation_results") or {}).get(s, {}).get(pm)
     if not sd:
         return "n/a"
-    return f"{num(sd.get('score'))}{ci_text(sd.get('uncertainty'))}"
+    return score_text(sd)
 
 
 def comparison_line(c: dict) -> str:
@@ -174,6 +212,13 @@ def results_block(run: Run) -> str:
     if setup == "custom" and m.get("setup_notes"):
         setup += f" ({m['setup_notes']})"
     L.append(f"- Tasks: {tasks_line(m)}. Setup: {setup}. Judge: {judge_line(m)}")
+    rules = [
+        f"{mid}: {subset_rule(cfg)}"
+        for mid, cfg in (m.get("metric_config") or {}).items()
+        if stats.computable(cfg) and stats.is_subset_metric(cfg) and subset_rule(cfg)
+    ]
+    if rules:
+        L.append(f"- Metric subsets: {'; '.join(rules)}")
     pm = m.get("primary_metric")
     prim = "; ".join(f"{s['name']} {primary_line(m, s['name'])}" for s in m.get("subjects", []))
     L.append(f"- Primary ({pm}): {prim}")
@@ -185,7 +230,7 @@ def results_block(run: Run) -> str:
         for s in m.get("subjects", []):
             sd = (m.get("evaluation_results") or {}).get(s["name"], {}).get(mid)
             if sd:
-                vals.append(f"{s['name']} {num(sd.get('score'))}{ci_text(sd.get('uncertainty'))}")
+                vals.append(f"{s['name']} {score_text(sd)}")
         if vals:
             others.append(f"{mid}: " + ", ".join(vals))
     if others:

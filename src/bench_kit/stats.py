@@ -7,6 +7,9 @@ computed across tasks. Intervals are 95%.
 - A vs B: paired per-task differences, t interval, wins/ties/losses, exact sign test
 - clustered (manifest stats.cluster_by set): cluster-robust (CR1) standard error over clusters of
   tasks and a t interval with n_clusters - 1 df, for scores and paired differences alike
+- per-metric subsets (metric_config task_filter, metric_parameters field and missing): the metric, its
+  interval and its paired comparisons use only the tasks the filter keeps, reading each row's value from
+  the given field; score_details.subset reports the tasks used and the rows with no value
 """
 
 from __future__ import annotations
@@ -265,6 +268,9 @@ def paired(
 
 # ------------------------------------------------------------- samples -> per-task values
 
+MISSING_RULES = ("zero", "excluded")
+RATES = ("is_correct", "pass_at_k", "pass_hat_k")
+
 
 def _score(row: dict, counted_as: str) -> float | None:
     v = (row.get("evaluation") or {}).get("score")
@@ -284,21 +290,161 @@ def usable(rows: list[dict], counted_as: str) -> list[dict]:
     return [x for x in rows if not (x.get("error") and counted_as == "excluded")]
 
 
-def per_task(rows: list[dict], subject: str, metric: dict, counted_as: str) -> dict[str, float]:
-    """Per-task value for one subject and one metric_config entry."""
+def field_value(row: dict, path: str):
+    """Value at a dotted path in a sample row ("evaluation.score", "metadata.kind"); None when absent."""
+    cur = row
+    for part in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def is_subset_metric(metric: dict) -> bool:
+    """True when a metric uses any v0.4.0 option (task_filter, metric_parameters.field or .missing)."""
+    params = metric.get("metric_parameters") or {}
+    return bool(metric.get("task_filter")) or params.get("field") is not None or params.get("missing") is not None
+
+
+def _check_options(metric: dict) -> None:
+    params = metric.get("metric_parameters") or {}
+    miss = params.get("missing")
+    if miss is not None and miss not in MISSING_RULES:
+        raise ValueError(f"metric_parameters.missing must be one of {list(MISSING_RULES)}, got {miss!r}")
+    fld = params.get("field")
+    if fld is not None and (not isinstance(fld, str) or not fld):
+        raise ValueError(f"metric_parameters.field must be a dotted path such as 'metadata.recall', got {fld!r}")
+    tf = metric.get("task_filter")
+    if tf is None:
+        return
+    if not isinstance(tf, dict) or not tf:
+        raise ValueError("task_filter must be an object with field + equals/in, and/or sample_ids")
+    unknown = set(tf) - {"field", "equals", "in", "sample_ids"}
+    if unknown:
+        raise ValueError(f"task_filter has unknown keys {sorted(unknown)}")
+    if "field" in tf:
+        if ("equals" in tf) == ("in" in tf):
+            raise ValueError("task_filter.field needs exactly one of equals or in")
+        if "in" in tf and not isinstance(tf["in"], list):
+            raise ValueError("task_filter.in must be a list")
+    elif "equals" in tf or "in" in tf:
+        raise ValueError("task_filter.equals and task_filter.in need task_filter.field")
+    if "sample_ids" in tf and not isinstance(tf["sample_ids"], list):
+        raise ValueError("task_filter.sample_ids must be a list of task ids")
+
+
+def filter_tasks(rows: list[dict], metric: dict) -> set[str] | None:
+    """Task ids a metric's task_filter keeps, or None when the metric has no filter (every task counts).
+
+    The filter is decided per task over every row of the run (all subjects and repeats): a task's value for
+    task_filter.field is the one non-null value its rows carry (rows without it, e.g. errored rows, take the
+    task's value from its other rows). A task whose rows disagree is an error; a task with no value never
+    matches. sample_ids, when given, must also contain the task.
+    """
+    _check_options(metric)
+    tf = metric.get("task_filter")
+    if not tf:
+        return None
+    tasks = {x["sample_id"] for x in rows}
+    keep = set(tasks)
+    if "sample_ids" in tf:
+        keep &= {str(t) for t in tf["sample_ids"]}
+    if "field" in tf:
+        key = tf["field"]
+        found: dict[str, list] = defaultdict(list)
+        for x in rows:
+            v = field_value(x, key)
+            if v is not None and v not in found[x["sample_id"]]:
+                found[x["sample_id"]].append(v)
+        want = [tf["equals"]] if "equals" in tf else list(tf["in"])
+        matched = set()
+        for t in sorted(keep):
+            vals = found.get(t) or []
+            if len(vals) > 1:
+                raise ValueError(f"task {t!r} has more than one value for task_filter field {key!r}: {vals}")
+            if vals and vals[0] in want:
+                matched.add(t)
+        keep = matched
+    return keep
+
+
+def filter_text(metric: dict) -> str | None:
+    """Short human form of a metric's task_filter, e.g. "metadata.kind = positive"."""
+    tf = metric.get("task_filter")
+    if not tf:
+        return None
+    parts = []
+    if "field" in tf:
+        if "equals" in tf:
+            parts.append(f"{tf['field']} = {tf['equals']}")
+        else:
+            parts.append(f"{tf['field']} in [{', '.join(str(v) for v in tf.get('in') or [])}]")
+    if "sample_ids" in tf:
+        ids = tf.get("sample_ids") or []
+        parts.append(f"{len(ids)} listed task{'' if len(ids) == 1 else 's'}")
+    return " and ".join(parts)
+
+
+def _row_value(row: dict, metric: dict, counted_as: str) -> tuple[float | None, str]:
+    """Per-row value of a metric and how it was found: "value", "zeroed" (missing, counted as 0) or "excluded"."""
+    params = metric.get("metric_parameters") or {}
+    src = params.get("from", "external")
+    rate = src in RATES
+    path = params.get("field")
+    miss = params.get("missing")
+    if path is None and miss is None:
+        # bench-kit 0.3.0 behaviour: evaluation.score / is_correct, errored rows with no value per errors.counted_as
+        if rate:
+            c = _correct(row, counted_as)
+            v = None if c is None else (1.0 if c else 0.0)
+        else:
+            v = _score(row, counted_as)
+        raw = (row.get("evaluation") or {}).get("is_correct" if rate else "score")
+        return (None, "excluded") if v is None else (float(v), "value" if raw is not None else "zeroed")
+    raw = field_value(row, path or ("evaluation.is_correct" if rate else "evaluation.score"))
+    if raw is None:
+        if miss == "zero" or (miss is None and row.get("error") and counted_as == "zero"):
+            return 0.0, "zeroed"
+        return None, "excluded"
+    if isinstance(raw, bool):
+        return (1.0 if raw else 0.0), "value"
+    if not isinstance(raw, (int, float)):
+        raise ValueError(f"row {row.get('sample_id')!r}: {path} is {raw!r}, not a number")
+    if rate and not (abs(raw) < EPS or abs(raw - 1) < EPS):
+        raise ValueError(f"row {row.get('sample_id')!r}: {path} is {raw!r}; rate metrics need true/false or 0/1")
+    return float(raw), "value"
+
+
+def per_task(
+    rows: list[dict],
+    subject: str,
+    metric: dict,
+    counted_as: str,
+    tasks: set[str] | None = None,
+    counts: dict | None = None,
+) -> dict[str, float]:
+    """Per-task value for one subject and one metric_config entry.
+
+    tasks limits the result to those task ids (a metric's task_filter, see filter_tasks); counts, when given,
+    receives this subject's "tasks" (filtered tasks it has rows for), "rows_zeroed" and "rows_excluded"."""
     params = metric.get("metric_parameters") or {}
     src = params.get("from", "external")
     by_task: dict[str, list] = defaultdict(list)
+    seen: set[str] = set()
+    zeroed = excluded = 0
     for x in usable(rows, counted_as):
         if x.get("subject") != subject:
             continue
-        if src == "score":
-            v = _score(x, counted_as)
-        else:
-            c = _correct(x, counted_as)
-            v = None if c is None else (1.0 if c else 0.0)
+        if tasks is not None and x["sample_id"] not in tasks:
+            continue
+        seen.add(x["sample_id"])
+        v, how = _row_value(x, metric, counted_as)
+        zeroed += how == "zeroed"
+        excluded += how == "excluded"
         if v is not None:
             by_task[x["sample_id"]].append(v)
+    if counts is not None:
+        counts.update({"tasks": len(seen), "rows_zeroed": zeroed, "rows_excluded": excluded})
     out: dict[str, float] = {}
     for t, vs in by_task.items():
         if src in ("score", "is_correct"):
@@ -312,7 +458,7 @@ def per_task(rows: list[dict], subject: str, metric: dict, counted_as: str) -> d
     return out
 
 
-def per_repeat(rows: list[dict], subject: str, metric: dict, counted_as: str) -> list[float | None]:
+def per_repeat(rows: list[dict], subject: str, metric: dict, counted_as: str, tasks: set[str] | None = None) -> list[float | None]:
     params = metric.get("metric_parameters") or {}
     src = params.get("from", "external")
     if src not in ("score", "is_correct"):
@@ -321,7 +467,7 @@ def per_repeat(rows: list[dict], subject: str, metric: dict, counted_as: str) ->
     out = []
     for rep in reps:
         sub = [x for x in rows if x.get("subject") == subject and x["repeat"] == rep]
-        vals = per_task(sub, subject, metric, counted_as)
+        vals = per_task(sub, subject, metric, counted_as, tasks)
         out.append(r(mean(list(vals.values()))) if vals else None)
     return out
 
@@ -378,17 +524,29 @@ def compute(manifest: dict, rows: list[dict]) -> dict:
     clusters = task_clusters(rows, key) if key else None
     results: dict = {}
     task_vals: dict = {}
+    keep = {mid: filter_tasks(rows, m) for mid, m in mcfg.items() if computable(m)}
     for s in subjects:
         for mid, m in mcfg.items():
             if not computable(m):
                 continue
-            tv = per_task(rows, s, m, counted_as)
+            counts: dict = {}
+            tv = per_task(rows, s, m, counted_as, keep[mid], counts)
             task_vals[(s, mid)] = tv
             labels = None if clusters is None else [clusters[t] for t in tv]
             sd = summarize(list(tv.values()), m, labels, key)
-            pr = per_repeat(rows, s, m, counted_as)
+            pr = per_repeat(rows, s, m, counted_as, keep[mid])
             if len(pr) > 1:
                 sd["per_repeat"] = pr
+            if is_subset_metric(m):
+                all_tasks = len({x["sample_id"] for x in usable(rows, counted_as) if x.get("subject") == s})
+                sd["subset"] = {
+                    "tasks": counts["tasks"],
+                    "of": all_tasks,
+                    "rows_zeroed": counts["rows_zeroed"],
+                    "rows_excluded": counts["rows_excluded"],
+                }
+                if filter_text(m):
+                    sd["subset"]["filter"] = filter_text(m)
             results.setdefault(s, {})[mid] = sd
     comps = []
     for c in manifest.get("comparisons") or []:
