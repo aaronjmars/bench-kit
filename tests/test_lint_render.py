@@ -1,4 +1,5 @@
 import json
+import re
 
 from conftest import manifest, samples, write_repo
 
@@ -165,3 +166,139 @@ def test_latest_prefers_headline_and_sorts_by_utc(tmp_path):
     runs = discover(tmp_path)
     assert [r.id for r in runs] == ["2026-10-10-other", "2026-10-09-ab"]
     assert render.latest_run(runs).id == "2026-10-09-ab"
+
+
+# ---------------------------------------------------------------- v0.3.0
+
+
+def test_num_and_money_keep_small_values():
+    assert render.num(0.000412) == "0.000412"
+    assert render.num(0.0123) == "0.0123"
+    assert render.num(0.4902) == "0.49"
+    assert render.num(0.12345) == "0.123"
+    assert render.num(3.14159) == "3.142"
+    assert render.num(-0.0004, True) == "-0.0004"
+    assert render.num(0) == "0" and render.num(0.9996) == "1"
+    assert render.money(0.00042) == "$0.00042"
+    assert render.money(0.4) == "$0.40"
+    assert render.money(0) == "$0.00"
+    assert render.money(1234.5) == "$1,234.50"
+    assert render.minutes(2) == "0.0333 min" and render.minutes(300) == "5.0 min"
+
+
+def test_render_small_costs_everywhere(tmp_path):
+    m = manifest(
+        cost={"usd": 0.0021, "basis": "api", "per_subject": {"A": {"usd_per_task": 0.00042, "seconds_per_task": 3}}},
+        seconds=12,
+    )
+    write_repo(tmp_path, m)
+    readme = (tmp_path / "README.md").read_text()
+    assert "| $0.00042 | 0.05 min |" in readme
+    res = (tmp_path / "RESULTS.md").read_text()
+    assert "Cost: $0.0021 total, api basis. Time: 0.2 min" in res
+    assert not re.search(r"\$0\.00(?!\d)|0\.000(?!\d)", readme + res)
+    assert lint.lint(tmp_path) == []
+
+
+def test_clustered_run_lints_clean(tmp_path):
+    rows = samples()
+    for x in rows:
+        x["cluster"] = "d1" if x["sample_id"] in ("t1", "t2") else "d2"
+    write_repo(tmp_path, manifest(stats={"cluster_by": "cluster"}), rows)
+    assert lint.lint(tmp_path) == []
+    assert "n=3 tasks in 2 clusters" in (tmp_path / "RESULTS.md").read_text()
+
+
+def test_bl004_cluster_spanning_two_values(tmp_path):
+    rows = samples()
+    for i, x in enumerate(rows):
+        x["cluster"] = f"c{i}"
+    write_repo(tmp_path, manifest(stats={"cluster_by": "cluster"}), rows, run_stats=False)
+    msgs = [f.message for f in lint.lint(tmp_path) if f.rule == "BL004"]
+    assert any("more than one cluster value" in m for m in msgs)
+    assert cli.main(["stats", str(tmp_path)]) == 1
+
+
+def uneven_rows() -> list[dict]:
+    return [x for x in samples() if not (x["subject"] == "B" and x["sample_id"] == "t3")]
+
+
+def test_bl004_uneven_subjects_need_declaration(tmp_path):
+    write_repo(tmp_path, rows=uneven_rows())
+    msgs = [f.message for f in lint.lint(tmp_path) if f.rule == "BL004"]
+    assert any("subject B: 4 rows" in m for m in msgs)
+
+
+def test_uneven_subjects_declared_pass_and_pair_shared_tasks(tmp_path):
+    sd = {"dataset_name": "demo", "version": "1-A", "n_planned": 3, "n_completed": 3, "n_completed_by_subject": {"B": 2}}
+    d = write_repo(tmp_path, manifest(source_data=sd), uneven_rows())
+    assert lint.lint(tmp_path) == []
+    c = json.loads((d / "manifest.json").read_text())["comparisons"][0]
+    assert c["uncertainty"]["num_samples"] == 2 and c["unpaired"] == {"baseline": 1, "candidate": 0}
+    res = (tmp_path / "RESULTS.md").read_text()
+    assert "n=2 tasks shared (1 baseline-only and 0 candidate-only left out)" in res
+    assert "(per subject, tasks x repeats: A 3 x 2, B 2 x 2)" in res
+
+
+def test_bl004_per_subject_count_mismatch_and_unknown_subject(tmp_path):
+    sd = {"dataset_name": "demo", "version": "1-A", "n_planned": 3, "n_completed": 3, "n_completed_by_subject": {"B": 3, "Z": 1}}
+    write_repo(tmp_path, manifest(source_data=sd), uneven_rows())
+    msgs = [f.message for f in lint.lint(tmp_path) if f.rule == "BL004"]
+    assert any("subject B: 4 rows, expected n_completed_by_subject x repeats.completed = 6" in m for m in msgs)
+    assert any("'Z', which is not a subject" in m for m in msgs)
+
+
+def test_uneven_repeats_declared_pass(tmp_path):
+    rows = [x for x in samples() if not (x["subject"] == "B" and x["repeat"] == 2)]
+    write_repo(tmp_path, rows=rows)
+    assert any("subject B: 3 rows" in f.message for f in lint.lint(tmp_path) if f.rule == "BL004")
+    rp = {"planned": 2, "completed": 2, "completed_by_subject": {"B": 1}}
+    (tmp_path / "ok").mkdir()
+    write_repo(tmp_path / "ok", manifest(repeats=rp), rows)
+    assert lint.lint(tmp_path / "ok") == []
+
+
+def test_bl005_uses_per_subject_repeats(tmp_path):
+    rows = [x for x in samples() if not (x["subject"] == "B" and x["repeat"] == 2)]
+    rp = {"planned": 2, "completed": 2, "completed_by_subject": {"B": 1}}
+    write_repo(tmp_path, manifest(repeats=rp, verdict="WINNER:B"), rows)
+    msgs = [f.message for f in lint.lint(tmp_path) if f.rule == "BL005"]
+    assert any("fewer than 2 repeats" in m for m in msgs)
+
+
+def test_export_eee_single_turn_validates(tmp_path):
+    from jsonschema import Draft7Validator
+
+    from bench_kit.io import load_schema
+
+    rows = samples()
+    rows[0]["output"] = "The answer is 4."
+    rows[1]["output"] = {"raw": ["4"], "reasoning_trace": "2 + 2"}
+    d = write_repo(tmp_path, manifest(interaction_type="single_turn"), rows)
+    assert lint.lint(tmp_path) == []
+    paths = export_eee.export(load_run(d), tmp_path / "eee")
+    inst = [json.loads(line) for p in paths if p.suffix == ".jsonl" for line in p.read_text().splitlines()]
+    v = Draft7Validator(load_schema("eee/instance_level_eval.schema.json"))
+    assert len(inst) == 12
+    for row in inst:
+        assert list(v.iter_errors(row)) == []
+        assert row["interaction_type"] == "single_turn" and row["messages"] is None
+    by_id = {r["sample_id"]: r["output"] for r in inst if r["model_id"].endswith("haiku-5-5")}
+    assert by_id["t1#1"] == {"raw": ["The answer is 4."]}
+    assert by_id["t1#2"] == {"raw": ["4"], "reasoning_trace": ["2 + 2"]}
+    assert by_id["t2#1"] == {"raw": []}
+
+
+def test_instance_output_accepts_list():
+    out = export_eee.instance_output({"output": ["a", "b"]})
+    assert out == {"raw": ["a", "b"]}
+
+
+def test_v020_manifest_still_valid():
+    from jsonschema import Draft7Validator
+
+    from bench_kit.io import load_schema
+
+    m = stats.apply(manifest(), samples())
+    assert list(Draft7Validator(load_schema("bench-manifest-1.schema.json")).iter_errors(m)) == []
+    assert m["schema_version"] == "bench-manifest/1"

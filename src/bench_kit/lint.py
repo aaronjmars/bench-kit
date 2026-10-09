@@ -17,7 +17,7 @@ RULES = {
     "BL001": ("error", "manifest or samples fail schema, duplicate run id, or id differs from directory"),
     "BL002": ("error", "required file or README section missing, or Status has no date"),
     "BL003": ("error", "generated files out of date (run bench-kit render)"),
-    "BL004": ("error", "samples disagree with manifest (row count or recomputed numbers)"),
+    "BL004": ("error", "samples disagree with manifest (row count per subject or recomputed numbers)"),
     "BL005": ("error", "SWITCH or WINNER verdict not backed by stats"),
     "BL006": ("error", "em or en dash"),
     "BL007": ("warning", "model id is an alias, or subject version missing without reason"),
@@ -188,12 +188,20 @@ class Linter:
                 self.add("BL004", r.samples_path, f"subjects not in manifest: {extra}")
             sd = m.get("source_data") or {}
             rp = m.get("repeats") or {}
-            if isinstance(sd.get("n_completed"), int) and isinstance(rp.get("completed"), int):
-                want = sd["n_completed"] * rp["completed"]
-                for s in sorted(names):
-                    got = sum(1 for x in r.samples if x.get("subject") == s)
-                    if got != want:
-                        self.add("BL004", r.samples_path, f"subject {s}: {got} rows, expected n_completed x repeats.completed = {want}")
+            nt_by, nr_by = sd.get("n_completed_by_subject") or {}, rp.get("completed_by_subject") or {}
+            for k in sorted((set(nt_by) | set(nr_by)) - names):
+                self.add("BL004", r.manifest_path, f"per-subject count for {k!r}, which is not a subject")
+            for s in sorted(n for n in names if n is not None):
+                nt = nt_by.get(s, sd.get("n_completed"))
+                nr = nr_by.get(s, rp.get("completed"))
+                if not (isinstance(nt, int) and isinstance(nr, int)):
+                    continue
+                want = nt * nr
+                got = sum(1 for x in r.samples if x.get("subject") == s)
+                if got != want:
+                    tl = "n_completed_by_subject" if s in nt_by else "n_completed"
+                    rl = "repeats.completed_by_subject" if s in nr_by else "repeats.completed"
+                    self.add("BL004", r.samples_path, f"subject {s}: {got} rows, expected {tl} x {rl} = {want}")
             try:
                 fresh = stats.compute(m, r.samples)
             except (KeyError, TypeError, ValueError) as e:
@@ -226,13 +234,17 @@ class Linter:
             v = str(m.get("verdict") or "")
             if not (v == "SWITCH" or v.startswith("WINNER:")):
                 continue
-            if (m.get("repeats") or {}).get("completed", 0) < 2:
-                self.add("BL005", r.manifest_path, f"verdict {v} with fewer than 2 repeats; use INCONCLUSIVE, KEEP or SNAPSHOT")
             pm = m.get("primary_metric")
             comps = [c for c in m.get("comparisons") or [] if c.get("metric_id") == pm]
             if v.startswith("WINNER:"):
                 w = v.split(":", 1)[1]
                 comps = [c for c in comps if w in (c.get("baseline"), c.get("candidate"))]
+            rp = m.get("repeats") or {}
+            by = rp.get("completed_by_subject") or {}
+            involved = {x for c in comps for x in (c.get("baseline"), c.get("candidate"))} or {s.get("name") for s in m.get("subjects", [])}
+            reps = min((by.get(x, rp.get("completed", 0)) for x in involved), default=rp.get("completed", 0))
+            if reps < 2:
+                self.add("BL005", r.manifest_path, f"verdict {v} with fewer than 2 repeats; use INCONCLUSIVE, KEEP or SNAPSHOT")
             if not comps:
                 self.add("BL005", r.manifest_path, f"verdict {v} without a comparison on the primary metric")
                 continue

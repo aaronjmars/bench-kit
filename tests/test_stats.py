@@ -133,3 +133,112 @@ def test_rate_all_zero_one_uses_wilson():
     sd = stats.summarize([1, 0, 1, 1], {"metric_parameters": {"from": "is_correct"}})
     lo, hi = stats.wilson(3, 4)
     assert sd["uncertainty"]["confidence_interval"] == {"lower": round(lo, 4), "upper": round(hi, 4), "confidence_level": 0.95, "method": "wilson"}
+
+
+def test_round_keeps_small_values():
+    assert stats.r(0.00012345) == 0.000123
+    assert stats.r(0.0051234) == 0.00512
+    assert stats.r(2.123456) == 2.1235
+    assert stats.r(0.123456) == 0.1235
+    assert stats.r(0) == 0 and stats.r(None) is None
+
+
+def test_cluster_se_hand_computed():
+    # [1, 2, 3, 4] in clusters a a b b: mean 2.5, cluster sums -2 and 2, G 2
+    # se^2 = 2 / 1 * (4 + 4) / 16 = 1, t(1) = 12.706
+    m, se, lo, hi, g = stats.cluster_t_interval([1, 2, 3, 4], ["a", "a", "b", "b"])
+    assert (m, se, g) == (2.5, 1.0, 2)
+    assert lo == pytest.approx(2.5 - 12.706) and hi == pytest.approx(2.5 + 12.706)
+
+
+def test_cluster_se_singletons_equal_plain_se():
+    xs = [1, 2, 3, 4]
+    se, g = stats.cluster_se(xs, ["a", "b", "c", "d"])
+    assert g == 4 and se == pytest.approx(stats.t_interval(xs)[1])
+
+
+def test_summarize_clustered():
+    sd = stats.summarize([1, 2, 3, 4], {"metric_parameters": {"from": "score"}}, ["a", "a", "b", "b"], "date")
+    unc = sd["uncertainty"]
+    assert unc["num_samples"] == 4 and unc["num_clusters"] == 2
+    assert unc["standard_error"]["value"] == 1.0
+    assert unc["confidence_interval"]["method"] == "t, clustered by date (1 df)"
+    # one cluster: no interval
+    one = stats.summarize([1, 2], None, ["a", "a"], "date")
+    assert "confidence_interval" not in one["uncertainty"] and one["uncertainty"]["num_clusters"] == 1
+
+
+def test_paired_clustered_hand_computed():
+    # diffs [1, 0, 2, 3], clusters x x y y: mean 1.5, cluster sums -2 and 2, se 1, t(1)
+    base = {"t1": 1, "t2": 2, "t3": 3, "t4": 4}
+    cand = {"t1": 2, "t2": 2, "t3": 5, "t4": 7}
+    out = stats.paired(base, cand, clusters={"t1": "x", "t2": "x", "t3": "y", "t4": "y"}, cluster_by="author")
+    assert out["diff"] == 1.5 and out["uncertainty"]["num_clusters"] == 2
+    assert out["uncertainty"]["standard_error"]["value"] == 1.0
+    ci = out["uncertainty"]["confidence_interval"]
+    assert ci["lower"] == pytest.approx(1.5 - 12.706, abs=1e-4) and ci["upper"] == pytest.approx(1.5 + 12.706, abs=1e-4)
+    assert (out["wins"], out["ties"], out["losses"]) == (3, 1, 0)
+
+
+def clustered_rows(key: str = "metadata") -> list[dict]:
+    day = {"t1": "2026-10-01", "t2": "2026-10-01", "t3": "2026-10-02"}
+    rows = samples()
+    for x in rows:
+        if key == "metadata":
+            x["metadata"] = {"date": day[x["sample_id"]]}
+        else:
+            x["cluster"] = day[x["sample_id"]]
+    return rows
+
+
+def test_compute_clustered_by_metadata_and_by_row_field():
+    a = stats.apply(manifest(stats={"cluster_by": "date"}), clustered_rows())
+    b = stats.apply(manifest(stats={"cluster_by": "cluster"}), clustered_rows("cluster"))
+    c = stats.apply(manifest(stats={"cluster_by": "metadata.date"}), clustered_rows())
+    for out in (a, b, c):
+        unc = out["evaluation_results"]["A"]["score"]["uncertainty"]
+        assert unc["num_clusters"] == 2
+        # A task means [1, 2, 3], clusters d1 d1 d2: mean 2, sums -1 and 1, se^2 = 2 * 2 / 9
+        assert unc["standard_error"]["value"] == pytest.approx(math.sqrt(4 / 9), abs=1e-4)
+        assert out["comparisons"][0]["uncertainty"]["num_clusters"] == 2
+        assert "clustered by" in out["comparisons"][0]["method"]
+    ci = lambda out: out["evaluation_results"]["B"]["score"]["uncertainty"]["confidence_interval"]  # noqa: E731
+    assert (ci(a)["lower"], ci(a)["upper"]) == (ci(c)["lower"], ci(c)["upper"])
+
+
+def test_unset_cluster_by_is_unchanged():
+    rows = clustered_rows("cluster")
+    assert stats.apply(manifest(), rows) == stats.apply(manifest(), samples())
+
+
+def test_cluster_must_be_constant_within_task():
+    rows = clustered_rows()
+    rows[0]["metadata"]["date"] = "2026-10-05"
+    with pytest.raises(ValueError, match="more than one cluster"):
+        stats.compute(manifest(stats={"cluster_by": "date"}), rows)
+    with pytest.raises(ValueError, match="no cluster value"):
+        stats.compute(manifest(stats={"cluster_by": "author"}), clustered_rows())
+
+
+def test_cluster_value_missing_on_error_row_uses_task_value():
+    rows = clustered_rows()
+    rows[0]["metadata"] = None
+    out = stats.compute(manifest(stats={"cluster_by": "date"}), rows)
+    assert out["evaluation_results"]["A"]["score"]["uncertainty"]["num_clusters"] == 2
+
+
+def test_paired_reports_unpaired_tasks():
+    out = stats.paired({"t1": 1, "t2": 2, "t3": 3}, {"t1": 2, "t2": 2})
+    assert out["uncertainty"]["num_samples"] == 2
+    assert out["unpaired"] == {"baseline": 1, "candidate": 0}
+    assert "unpaired" not in stats.paired({"t1": 1}, {"t1": 2})
+
+
+def test_uneven_repeats_average_within_task_first():
+    rows = [x for x in samples() if not (x["subject"] == "B" and x["repeat"] == 2)]
+    m = manifest(repeats={"planned": 2, "completed": 2, "completed_by_subject": {"B": 1}})
+    out = stats.apply(m, rows)
+    b = out["evaluation_results"]["B"]["score"]
+    assert b["score"] == pytest.approx((2 + 2 + 4) / 3, abs=1e-4) and "per_repeat" not in b
+    assert out["evaluation_results"]["A"]["score"]["score"] == 2.0
+    assert out["comparisons"][0]["uncertainty"]["num_samples"] == 3
