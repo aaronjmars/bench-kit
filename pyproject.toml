@@ -1,6 +1,7 @@
 [project]
 name = "bench-kit"
 version = "0.2.0"
+license = "MIT"
 description = "Shared standard, schema, renderer, stats and linter for bench repos"
 readme = "README.md"
 requires-python = ">=3.10"

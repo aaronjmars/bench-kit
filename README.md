@@ -48,3 +48,7 @@ uv sync && uv run pytest && uv run ruff check . && uv run ruff format --check .
 - `src/bench_kit/`: `stats.py`, `render.py`, `lint.py`, `export_eee.py`, `cli.py`
 - `action.yml`: composite action that installs bench-kit from the action checkout and runs `bench-kit lint`
 - `tests/`: pytest, including hand-computed stats checks
+
+## License
+
+MIT, see LICENSE. The vendored Every Eval Ever schemas in schema/eee/ keep their own MIT license (see schema/eee/SOURCE.md).
