@@ -302,3 +302,62 @@ def test_v020_manifest_still_valid():
     m = stats.apply(manifest(), samples())
     assert list(Draft7Validator(load_schema("bench-manifest-1.schema.json")).iter_errors(m)) == []
     assert m["schema_version"] == "bench-manifest/1"
+
+
+def equal_diff_rows() -> list[dict]:
+    """2 tasks x 2 repeats where B beats A by exactly 0.958 on both tasks."""
+    a = {"t1": 0.0, "t2": 0.042}
+    rows = []
+    for task, base in a.items():
+        for subj, v in (("A", base), ("B", base + 0.958)):
+            for rep in (1, 2):
+                rows.append({"sample_id": task, "subject": subj, "repeat": rep, "evaluation": {"score": v}, "error": None})
+    return rows
+
+
+def equal_diff_manifest(**over) -> dict:
+    m = manifest(source_data={"dataset_name": "demo", "version": "1-A", "n_planned": 2, "n_completed": 2})
+    m["metric_config"] = {"score": m["metric_config"]["score"]}
+    m.update(over)
+    return m
+
+
+def test_all_paired_diffs_equal_renders_no_interval(tmp_path):
+    d = write_repo(tmp_path, equal_diff_manifest(), equal_diff_rows())
+    assert lint.lint(tmp_path) == []
+    c = json.loads((d / "manifest.json").read_text())["comparisons"][0]
+    assert "confidence_interval" not in c["uncertainty"] and c["uncertainty"]["no_interval_reason"] == "all 2 paired diffs equal"
+    text = (tmp_path / "README.md").read_text() + (tmp_path / "RESULTS.md").read_text()
+    assert "diff +0.958 [CI n/a: all 2 paired diffs equal], n=2 tasks" in text
+    assert "[0.958, 0.958]" not in text
+
+
+def test_bl005_no_interval_is_not_a_win(tmp_path):
+    write_repo(tmp_path, equal_diff_manifest(verdict="SWITCH"), equal_diff_rows())
+    msgs = [f.message for f in lint.lint(tmp_path) if f.rule == "BL005"]
+    assert msgs == ["verdict SWITCH: comparison B vs A has no CI (all 2 paired diffs equal)"]
+
+
+def test_bl011_stored_zero_width_interval(tmp_path):
+    # a manifest written by an older bench-kit still carries the zero-width interval
+    d = write_repo(tmp_path, equal_diff_manifest(verdict="SWITCH"), equal_diff_rows())
+    data = json.loads((d / "manifest.json").read_text())
+    unc = data["comparisons"][0]["uncertainty"]
+    del unc["no_interval_reason"]
+    unc["standard_error"] = {"value": 0.0, "method": "sd of paired diffs / sqrt(n)"}
+    unc["confidence_interval"] = {"lower": 0.958, "upper": 0.958, "confidence_level": 0.95, "method": "t"}
+    (d / "manifest.json").write_text(json.dumps(data, indent=2) + "\n")
+    render.render(tmp_path)
+    assert "diff +0.958 [CI n/a: zero width]" in (tmp_path / "RESULTS.md").read_text()
+    found = lint.lint(tmp_path)
+    bl011 = [f for f in found if f.rule == "BL011"]
+    assert len(bl011) == 1 and bl011[0].level == "warning" and "comparisons[0]: confidence interval [0.958, 0.958] has zero width" in bl011[0].message
+    assert any("zero-width CI is not an interval" in f.message for f in found if f.rule == "BL005")
+    assert any("ci.lower is 0.958, samples give None" in f.message for f in found if f.rule == "BL004")
+    assert cli.main(["stats", str(tmp_path)]) == 0 and cli.main(["render", str(tmp_path)]) == 0
+    assert "BL011" not in codes(tmp_path)
+
+
+def test_export_eee_with_no_interval_validates(tmp_path):
+    d = write_repo(tmp_path, equal_diff_manifest(), equal_diff_rows())
+    assert export_eee.export(load_run(d), tmp_path / "eee")

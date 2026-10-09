@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", action="append", help="only this run id (repeatable)")
     p.set_defaults(fn=cmd_stats)
 
-    p = sub.add_parser("lint", help="check the repo against the standard (BL001-BL010)")
+    p = sub.add_parser("lint", help="check the repo against the standard (BL001-BL011)")
     p.add_argument("root", nargs="?", type=Path, default=Path("."))
     p.add_argument("--warn-only", action="store_true", help="report errors but exit 0")
     p.add_argument("--format", choices=["auto", "github", "plain"], default="auto")

@@ -44,9 +44,14 @@ def num(x, signed: bool = False) -> str:
 
 
 def ci_text(unc: dict | None) -> str:
-    ci = (unc or {}).get("confidence_interval")
+    """ " [lower, upper]", or " [CI n/a: why]" when there is no real interval. A stored zero-width interval
+    (e.g. from an older bench-kit) is not printed: [0.958, 0.958] would read as perfect certainty."""
+    unc = unc or {}
+    ci = unc.get("confidence_interval")
+    if ci and ci["lower"] == ci["upper"]:
+        return " [CI n/a: zero width]"
     if not ci:
-        return ""
+        return f" [CI n/a: {unc['no_interval_reason']}]" if unc.get("no_interval_reason") else ""
     return f" [{num(ci['lower'])}, {num(ci['upper'])}]"
 
 

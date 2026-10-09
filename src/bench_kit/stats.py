@@ -10,6 +10,9 @@ computed across tasks. Intervals are 95%.
 - per-metric subsets (metric_config task_filter, metric_parameters field and missing): the metric, its
   interval and its paired comparisons use only the tasks the filter keeps, reading each row's value from
   the given field; score_details.subset reports the tasks used and the rows with no value
+- no interval: when one cannot be computed (1 task, 1 cluster) or would have zero width (every per-task value
+  or paired diff equal, so the standard error is 0), confidence_interval and standard_error are left out and
+  uncertainty.no_interval_reason says why; a zero-width interval would read as perfect certainty
 """
 
 from __future__ import annotations
@@ -132,6 +135,19 @@ def cluster_t_interval(xs: list[float], clusters: list) -> tuple[float, float, f
     return m, se, m - h, m + h, g_n
 
 
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def zero_width_reason(xs: list[float], se: float, what: str) -> str | None:
+    """Why an interval with standard error se would have zero width, or None when it is a real interval."""
+    if se > EPS:
+        return None
+    if max(xs) - min(xs) <= EPS:
+        return f"all {len(xs)} {what} equal"
+    return "standard error is 0"
+
+
 def is_binary(xs: list[float]) -> bool:
     return all(abs(x) < EPS or abs(x - 1) < EPS for x in xs)
 
@@ -162,6 +178,7 @@ def summarize(task_values: list[float], metric: dict | None = None, clusters: li
     Rate metrics whose per-task values are all 0 or 1 get a Wilson interval; everything else a t interval,
     clipped to the metric's range when it has one. With clusters (one label per task value) the standard
     error is cluster-robust and the interval is t with n_clusters - 1 df (no Wilson, it assumes independence).
+    With 1 task, 1 cluster or a zero standard error there is no interval: uncertainty.no_interval_reason says why.
     """
     metric = metric or {}
     n = len(task_values)
@@ -174,23 +191,35 @@ def summarize(task_values: list[float], metric: dict | None = None, clusters: li
         unc["num_clusters"] = g_n
         if n >= 2:
             unc["standard_deviation"] = r(stdev(task_values))
-        if g_n >= 2:
-            _, se, lo, hi, _ = cluster_t_interval(task_values, clusters)
-            unc["standard_error"] = {"value": r(se), "method": f"cluster-robust (CR1) by {cluster_by}, {g_n} clusters"}
-            lo, hi, method = _clip(lo, hi, metric, f"t, clustered by {cluster_by} ({g_n - 1} df)")
-            unc["confidence_interval"] = {"lower": r(lo), "upper": r(hi), "confidence_level": 0.95, "method": method}
-        return {"score": r(m), "uncertainty": unc}
-    if n >= 2:
-        sd = stdev(task_values)
-        unc["standard_deviation"] = r(sd)
-        unc["standard_error"] = {"value": r(sd / math.sqrt(n)), "method": "sd of task means / sqrt(n)"}
-        if is_rate(metric) and is_binary(task_values):
-            lo, hi = wilson(sum(task_values), n)
-            method = "wilson"
-        else:
-            _, _, lo, hi = t_interval(task_values)
-            lo, hi, method = _clip(lo, hi, metric, "t")
+        if g_n < 2:
+            unc["no_interval_reason"] = plural(g_n, "cluster")
+            return {"score": r(m), "uncertainty": unc}
+        _, se, lo, hi, _ = cluster_t_interval(task_values, clusters)
+        why = zero_width_reason(task_values, se, "task values")
+        if why:
+            unc["no_interval_reason"] = why
+            return {"score": r(m), "uncertainty": unc}
+        unc["standard_error"] = {"value": r(se), "method": f"cluster-robust (CR1) by {cluster_by}, {g_n} clusters"}
+        lo, hi, method = _clip(lo, hi, metric, f"t, clustered by {cluster_by} ({g_n - 1} df)")
         unc["confidence_interval"] = {"lower": r(lo), "upper": r(hi), "confidence_level": 0.95, "method": method}
+        return {"score": r(m), "uncertainty": unc}
+    if n < 2:
+        unc["no_interval_reason"] = plural(n, "task")
+        return {"score": r(m), "uncertainty": unc}
+    sd = stdev(task_values)
+    unc["standard_deviation"] = r(sd)
+    if is_rate(metric) and is_binary(task_values):
+        lo, hi = wilson(sum(task_values), n)
+        method = "wilson"
+    else:
+        why = zero_width_reason(task_values, sd / math.sqrt(n), "task values")
+        if why:
+            unc["no_interval_reason"] = why
+            return {"score": r(m), "uncertainty": unc}
+        _, _, lo, hi = t_interval(task_values)
+        lo, hi, method = _clip(lo, hi, metric, "t")
+    unc["standard_error"] = {"value": r(sd / math.sqrt(n)), "method": "sd of task means / sqrt(n)"}
+    unc["confidence_interval"] = {"lower": r(lo), "upper": r(hi), "confidence_level": 0.95, "method": method}
     return {"score": r(m), "uncertainty": unc}
 
 
@@ -214,7 +243,8 @@ def paired(
 
     clusters maps task id to cluster label; when given, the standard error of the mean difference is
     cluster-robust and the interval is t with n_clusters - 1 df. W/T/L and the sign test stay per task.
-    Tasks only one side has are left out and counted in "unpaired".
+    Tasks only one side has are left out and counted in "unpaired". With 1 shared task, 1 cluster or every
+    paired diff equal there is no interval: uncertainty.no_interval_reason says why.
     """
     common = sorted(set(base) & set(cand))
     diffs = [cand[t] - base[t] for t in common]
@@ -241,8 +271,15 @@ def paired(
         g_n = len(set(labels))
         out["uncertainty"]["num_clusters"] = g_n
         out["method"] = f"paired by task, t on per-task differences, clustered by {cluster_by}"
-        if g_n >= 2:
-            _, se, lo, hi, _ = cluster_t_interval(diffs, labels)
+        if g_n < 2:
+            if diffs:
+                out["uncertainty"]["no_interval_reason"] = plural(g_n, "cluster")
+            return out
+        _, se, lo, hi, _ = cluster_t_interval(diffs, labels)
+        why = zero_width_reason(diffs, se, "paired diffs")
+        if why:
+            out["uncertainty"]["no_interval_reason"] = why
+        else:
             out["uncertainty"].update(
                 {
                     "standard_error": {"value": r(se), "method": f"cluster-robust (CR1) by {cluster_by}, {g_n} clusters"},
@@ -255,8 +292,14 @@ def paired(
                 }
             )
         return out
-    if len(diffs) >= 2:
+    if len(diffs) == 1:
+        out["uncertainty"]["no_interval_reason"] = "1 shared task"
+    elif len(diffs) >= 2:
         m, se, lo, hi = t_interval(diffs)
+        why = zero_width_reason(diffs, se, "paired diffs")
+        if why:
+            out["uncertainty"]["no_interval_reason"] = why
+            return out
         out["uncertainty"].update(
             {
                 "standard_error": {"value": r(se), "method": "sd of paired diffs / sqrt(n)"},

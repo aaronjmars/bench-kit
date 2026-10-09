@@ -242,3 +242,44 @@ def test_uneven_repeats_average_within_task_first():
     assert b["score"] == pytest.approx((2 + 2 + 4) / 3, abs=1e-4) and "per_repeat" not in b
     assert out["evaluation_results"]["A"]["score"]["score"] == 2.0
     assert out["comparisons"][0]["uncertainty"]["num_samples"] == 3
+
+
+def test_paired_all_diffs_equal_has_no_interval():
+    # 2 tasks, both diffs +0.958: sd 0, so a t interval would be [0.958, 0.958]
+    out = stats.paired({"t1": 0.0, "t2": 0.042}, {"t1": 0.958, "t2": 1.0})
+    unc = out["uncertainty"]
+    assert out["diff"] == 0.958 and (out["wins"], out["ties"], out["losses"]) == (2, 0, 0)
+    assert "confidence_interval" not in unc and "standard_error" not in unc
+    assert unc["no_interval_reason"] == "all 2 paired diffs equal" and unc["num_samples"] == 2
+
+
+def test_paired_one_shared_task_says_why():
+    out = stats.paired({"t1": 1}, {"t1": 2})
+    assert "confidence_interval" not in out["uncertainty"] and out["uncertainty"]["no_interval_reason"] == "1 shared task"
+    assert "no_interval_reason" not in stats.paired({}, {})["uncertainty"]
+
+
+def test_summarize_equal_values_has_no_interval():
+    sd = stats.summarize([3, 3, 3], {"metric_parameters": {"from": "score"}})
+    unc = sd["uncertainty"]
+    assert sd["score"] == 3 and unc["standard_deviation"] == 0
+    assert "confidence_interval" not in unc and "standard_error" not in unc
+    assert unc["no_interval_reason"] == "all 3 task values equal"
+    assert stats.summarize([0.7])["uncertainty"]["no_interval_reason"] == "1 task"
+    # Wilson is never zero width: all-pass rates keep their interval
+    wil = stats.summarize([1, 1, 1], {"metric_parameters": {"from": "is_correct"}})["uncertainty"]
+    assert wil["confidence_interval"]["method"] == "wilson" and "no_interval_reason" not in wil
+
+
+def test_clustered_zero_se_has_no_interval():
+    # diffs [1, 3, 1, 3] in clusters a a b b: mean 2, both cluster sums 0, so the CR1 se is 0
+    out = stats.paired(
+        {"t1": 0, "t2": 0, "t3": 0, "t4": 0},
+        {"t1": 1, "t2": 3, "t3": 1, "t4": 3},
+        clusters={"t1": "a", "t2": "a", "t3": "b", "t4": "b"},
+        cluster_by="date",
+    )
+    assert "confidence_interval" not in out["uncertainty"]
+    assert out["uncertainty"]["no_interval_reason"] == "standard error is 0"
+    one = stats.summarize([1, 2], None, ["a", "a"], "date")
+    assert one["uncertainty"]["no_interval_reason"] == "1 cluster"

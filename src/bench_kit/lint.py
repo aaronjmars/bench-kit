@@ -1,4 +1,4 @@
-"""bench-lint: rules BL001-BL010 from STANDARD.md section 9."""
+"""bench-lint: rules BL001-BL011 from STANDARD.md section 9."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ RULES = {
     "BL008": ("warning", "revision.dirty is true without a correction note"),
     "BL009": ("warning", "task-set version missing from METHOD.md changelog"),
     "BL010": ("warning", "leftover TODO, or raw data not kept without location or reason"),
+    "BL011": ("warning", "stored confidence interval has zero width (lower equals upper)"),
 }
 REQUIRED_FILES = ["README.md", "METHOD.md", "NEXT.md", "RESULTS.md", "runs/INDEX.md"]
 README_SECTIONS = ["Status", "Latest result", "How it works", "Run it", "Layout"]
@@ -251,9 +252,15 @@ class Linter:
                 continue
             lib = bool(((m.get("metric_config") or {}).get(pm) or {}).get("lower_is_better"))
             for c in comps:
-                ci = (c.get("uncertainty") or {}).get("confidence_interval")
-                if not ci:
-                    self.add("BL005", r.manifest_path, f"verdict {v}: comparison {c.get('candidate')} vs {c.get('baseline')} has no CI")
+                unc = c.get("uncertainty") or {}
+                ci = unc.get("confidence_interval")
+                if not ci or ci["lower"] == ci["upper"]:
+                    why = unc.get("no_interval_reason") or ("zero-width CI is not an interval" if ci else None)
+                    self.add(
+                        "BL005",
+                        r.manifest_path,
+                        f"verdict {v}: comparison {c.get('candidate')} vs {c.get('baseline')} has no CI" + (f" ({why})" if why else ""),
+                    )
                     continue
                 if ci["lower"] <= 0 <= ci["upper"]:
                     self.add(
@@ -309,6 +316,26 @@ class Linter:
             raw = r.manifest.get("raw") or {}
             if raw.get("kept") is False and not (raw.get("location") or raw.get("reason")):
                 self.add("BL010", r.manifest_path, "raw.kept is false without location or reason")
+
+    def bl011(self):
+        for r in self.runs:
+            m = r.manifest
+            found = [
+                (f"evaluation_results.{s}.{mid}", sd)
+                for s, metrics in (m.get("evaluation_results") or {}).items()
+                for mid, sd in (metrics or {}).items()
+            ]
+            found += [(f"comparisons[{i}]", c) for i, c in enumerate(m.get("comparisons") or [])]
+            for where, item in found:
+                ci = ((item or {}).get("uncertainty") or {}).get("confidence_interval")
+                if ci and ci.get("lower") is not None and ci.get("lower") == ci.get("upper"):
+                    self.add(
+                        "BL011",
+                        r.manifest_path,
+                        f"{where}: confidence interval [{ci['lower']}, {ci['upper']}] has zero width, which reads as perfect certainty"
+                        " (all per-task values or paired diffs equal); run bench-kit stats, or drop the interval and set"
+                        " uncertainty.no_interval_reason",
+                    )
 
     def run(self) -> list[Finding]:
         for rule in sorted(RULES):

@@ -249,7 +249,10 @@ def test_subset_run_lints_clean_and_renders_n(tmp_path):
         in results
     )
     assert "finder 0.625 [0.227, 1] (4 of 6 tasks; 1 row with no value counted as 0)" in results
-    assert "false_alarm: quiet 0 [0, 0] (2 of 6 tasks), finder 0.75 [0, 1] (2 of 6 tasks; 1 row with no value left out)" in results
+    assert (
+        "false_alarm: quiet 0 [CI n/a: all 2 task values equal] (2 of 6 tasks), finder 0.75 [0, 1] (2 of 6 tasks; 1 row with no value left out)"
+        in results
+    )
     assert "finder vs quiet on recall: diff +0.625 [0.227, 1.023], n=4 tasks" in results
     readme = (tmp_path / "README.md").read_text()
     assert "| finder | 0.625 [0.227, 1] (4 of 6 tasks; 1 row with no value counted as 0) | 4 |" in readme
