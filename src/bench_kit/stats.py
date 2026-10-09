@@ -5,6 +5,8 @@ computed across tasks. Intervals are 95%.
 - rate metrics (is_correct, pass@k, pass^k) with per-task values all 0 or 1: Wilson score interval
 - otherwise: Student t interval on the task means (n - 1 df), clipped to the metric range
 - A vs B: paired per-task differences, t interval, wins/ties/losses, exact sign test
+- clustered (manifest stats.cluster_by set): cluster-robust (CR1) standard error over clusters of
+  tasks and a t interval with n_clusters - 1 df, for scores and paired differences alike
 """
 
 from __future__ import annotations
@@ -66,7 +68,12 @@ def t_crit(df: int) -> float:
 
 
 def r(x: float | None) -> float | None:
-    return None if x is None else round(x, ROUND)
+    """Round to ROUND decimals, keeping at least 3 significant figures for small values."""
+    if x is None:
+        return None
+    if x == 0 or not math.isfinite(x):
+        return round(x, ROUND)
+    return round(x, max(ROUND, 2 - math.floor(math.log10(abs(x)))))
 
 
 def mean(xs: list[float]) -> float:
@@ -96,6 +103,32 @@ def t_interval(xs: list[float]) -> tuple[float, float, float, float]:
     return m, se, m - h, m + h
 
 
+def cluster_se(xs: list[float], clusters: list) -> tuple[float, int]:
+    """Cluster-robust (CR1) standard error of the mean of xs, and the number of clusters.
+
+    se^2 = G / (G - 1) * sum_g (sum_{i in g} (x_i - mean))^2 / n^2. With every value in its own
+    cluster this equals sd / sqrt(n), the unclustered standard error.
+    """
+    n = len(xs)
+    m = mean(xs)
+    sums: dict = defaultdict(float)
+    for x, g in zip(xs, clusters, strict=True):
+        sums[g] += x - m
+    g_n = len(sums)
+    if g_n < 2:
+        return float("nan"), g_n
+    var = g_n / (g_n - 1) * sum(v * v for v in sums.values()) / (n * n)
+    return math.sqrt(var), g_n
+
+
+def cluster_t_interval(xs: list[float], clusters: list) -> tuple[float, float, float, float, int]:
+    """mean, cluster-robust se, lower, upper, n_clusters. t with n_clusters - 1 df. Needs >= 2 clusters."""
+    m = mean(xs)
+    se, g_n = cluster_se(xs, clusters)
+    h = t_crit(g_n - 1) * se
+    return m, se, m - h, m + h, g_n
+
+
 def is_binary(xs: list[float]) -> bool:
     return all(abs(x) < EPS or abs(x - 1) < EPS for x in xs)
 
@@ -111,11 +144,21 @@ def is_rate(metric: dict) -> bool:
     return (metric.get("metric_parameters") or {}).get("from") in ("is_correct", "pass_at_k", "pass_hat_k")
 
 
-def summarize(task_values: list[float], metric: dict | None = None) -> dict:
+def _clip(lo: float, hi: float, metric: dict, method: str) -> tuple[float, float, str]:
+    lo_b, hi_b = bounds(metric)
+    if (lo_b is not None and lo < lo_b) or (hi_b is not None and hi > hi_b):
+        lo = lo if lo_b is None else max(lo, lo_b)
+        hi = hi if hi_b is None else min(hi, hi_b)
+        method += ", clipped to metric range"
+    return lo, hi, method
+
+
+def summarize(task_values: list[float], metric: dict | None = None, clusters: list | None = None, cluster_by: str | None = None) -> dict:
     """score_details for a list of per-task values.
 
     Rate metrics whose per-task values are all 0 or 1 get a Wilson interval; everything else a t interval,
-    clipped to the metric's range when it has one.
+    clipped to the metric's range when it has one. With clusters (one label per task value) the standard
+    error is cluster-robust and the interval is t with n_clusters - 1 df (no Wilson, it assumes independence).
     """
     metric = metric or {}
     n = len(task_values)
@@ -123,6 +166,17 @@ def summarize(task_values: list[float], metric: dict | None = None) -> dict:
         return {"score": None, "uncertainty": {"num_samples": 0}}
     m = mean(task_values)
     unc: dict = {"num_samples": n}
+    if clusters is not None:
+        g_n = len(set(clusters))
+        unc["num_clusters"] = g_n
+        if n >= 2:
+            unc["standard_deviation"] = r(stdev(task_values))
+        if g_n >= 2:
+            _, se, lo, hi, _ = cluster_t_interval(task_values, clusters)
+            unc["standard_error"] = {"value": r(se), "method": f"cluster-robust (CR1) by {cluster_by}, {g_n} clusters"}
+            lo, hi, method = _clip(lo, hi, metric, f"t, clustered by {cluster_by} ({g_n - 1} df)")
+            unc["confidence_interval"] = {"lower": r(lo), "upper": r(hi), "confidence_level": 0.95, "method": method}
+        return {"score": r(m), "uncertainty": unc}
     if n >= 2:
         sd = stdev(task_values)
         unc["standard_deviation"] = r(sd)
@@ -132,12 +186,7 @@ def summarize(task_values: list[float], metric: dict | None = None) -> dict:
             method = "wilson"
         else:
             _, _, lo, hi = t_interval(task_values)
-            method = "t"
-            lo_b, hi_b = bounds(metric)
-            if (lo_b is not None and lo < lo_b) or (hi_b is not None and hi > hi_b):
-                lo = lo if lo_b is None else max(lo, lo_b)
-                hi = hi if hi_b is None else min(hi, hi_b)
-                method = "t, clipped to metric range"
+            lo, hi, method = _clip(lo, hi, metric, "t")
         unc["confidence_interval"] = {"lower": r(lo), "upper": r(hi), "confidence_level": 0.95, "method": method}
     return {"score": r(m), "uncertainty": unc}
 
@@ -151,8 +200,19 @@ def sign_test_p(wins: int, losses: int) -> float | None:
     return min(1.0, 2 * p)
 
 
-def paired(base: dict[str, float], cand: dict[str, float], lower_is_better: bool = False) -> dict:
-    """Paired comparison over tasks present in both. diff = candidate - baseline."""
+def paired(
+    base: dict[str, float],
+    cand: dict[str, float],
+    lower_is_better: bool = False,
+    clusters: dict | None = None,
+    cluster_by: str | None = None,
+) -> dict:
+    """Paired comparison over tasks present in both. diff = candidate - baseline.
+
+    clusters maps task id to cluster label; when given, the standard error of the mean difference is
+    cluster-robust and the interval is t with n_clusters - 1 df. W/T/L and the sign test stay per task.
+    Tasks only one side has are left out and counted in "unpaired".
+    """
     common = sorted(set(base) & set(cand))
     diffs = [cand[t] - base[t] for t in common]
     better = [(-d if lower_is_better else d) for d in diffs]
@@ -168,8 +228,30 @@ def paired(base: dict[str, float], cand: dict[str, float], lower_is_better: bool
         "sign_test_p": r(sign_test_p(wins, losses)),
         "method": "paired by task, t on per-task differences",
     }
+    only_b, only_c = len(set(base) - set(cand)), len(set(cand) - set(base))
+    if only_b or only_c:
+        out["unpaired"] = {"baseline": only_b, "candidate": only_c}
     if diffs:
         out["diff"] = r(mean(diffs))
+    if clusters is not None:
+        labels = [clusters[t] for t in common]
+        g_n = len(set(labels))
+        out["uncertainty"]["num_clusters"] = g_n
+        out["method"] = f"paired by task, t on per-task differences, clustered by {cluster_by}"
+        if g_n >= 2:
+            _, se, lo, hi, _ = cluster_t_interval(diffs, labels)
+            out["uncertainty"].update(
+                {
+                    "standard_error": {"value": r(se), "method": f"cluster-robust (CR1) by {cluster_by}, {g_n} clusters"},
+                    "confidence_interval": {
+                        "lower": r(lo),
+                        "upper": r(hi),
+                        "confidence_level": 0.95,
+                        "method": f"t, clustered by {cluster_by} ({g_n - 1} df)",
+                    },
+                }
+            )
+        return out
     if len(diffs) >= 2:
         m, se, lo, hi = t_interval(diffs)
         out["uncertainty"].update(
@@ -244,6 +326,44 @@ def per_repeat(rows: list[dict], subject: str, metric: dict, counted_as: str) ->
     return out
 
 
+def cluster_key(manifest: dict) -> str | None:
+    """manifest stats.cluster_by: "cluster" for the row field, else a metadata key ("metadata." prefix optional)."""
+    key = (manifest.get("stats") or {}).get("cluster_by")
+    return key or None
+
+
+def row_cluster(row: dict, key: str):
+    if key == "cluster":
+        return row.get("cluster")
+    k = key[len("metadata.") :] if key.startswith("metadata.") else key
+    return (row.get("metadata") or {}).get(k)
+
+
+def task_clusters(rows: list[dict], key: str) -> dict[str, str]:
+    """Cluster label per task. A task must sit in exactly one cluster across subjects and repeats;
+    rows without a value (e.g. errored rows) take the task's value from its other rows."""
+    found: dict[str, set] = defaultdict(set)
+    tasks = set()
+    for x in rows:
+        tasks.add(x["sample_id"])
+        v = row_cluster(x, key)
+        if v is not None:
+            found[x["sample_id"]].add(label_of(v))
+    out = {}
+    for t in sorted(tasks):
+        vals = found.get(t) or set()
+        if not vals:
+            raise ValueError(f"task {t!r} has no cluster value for cluster_by {key!r}")
+        if len(vals) > 1:
+            raise ValueError(f"task {t!r} has more than one cluster value for cluster_by {key!r}: {sorted(vals)}")
+        out[t] = vals.pop()
+    return out
+
+
+def label_of(v) -> str:
+    return v if isinstance(v, str) else repr(v)
+
+
 def computable(metric: dict) -> bool:
     return (metric.get("metric_parameters") or {}).get("from", "external") != "external"
 
@@ -254,6 +374,8 @@ def compute(manifest: dict, rows: list[dict]) -> dict:
     counted_as = (manifest.get("errors") or {}).get("counted_as", "zero")
     mcfg = manifest.get("metric_config") or {}
     subjects = [s["name"] for s in manifest.get("subjects", [])]
+    key = cluster_key(manifest)
+    clusters = task_clusters(rows, key) if key else None
     results: dict = {}
     task_vals: dict = {}
     for s in subjects:
@@ -262,7 +384,8 @@ def compute(manifest: dict, rows: list[dict]) -> dict:
                 continue
             tv = per_task(rows, s, m, counted_as)
             task_vals[(s, mid)] = tv
-            sd = summarize(list(tv.values()), m)
+            labels = None if clusters is None else [clusters[t] for t in tv]
+            sd = summarize(list(tv.values()), m, labels, key)
             pr = per_repeat(rows, s, m, counted_as)
             if len(pr) > 1:
                 sd["per_repeat"] = pr
@@ -273,9 +396,10 @@ def compute(manifest: dict, rows: list[dict]) -> dict:
         m = mcfg.get(mid, {})
         new = dict(c)
         if computable(m):
+            new.pop("unpaired", None)
             b = task_vals.get((c["baseline"], mid)) or {}
             a = task_vals.get((c["candidate"], mid)) or {}
-            new.update(paired(b, a, bool(m.get("lower_is_better"))))
+            new.update(paired(b, a, bool(m.get("lower_is_better")), clusters, key))
         comps.append(new)
     errs = [x for x in rows if x.get("error")]
     by_src: dict = defaultdict(int)

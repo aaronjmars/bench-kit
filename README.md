@@ -2,7 +2,7 @@
 A results standard for benchmark repos, with JSON Schemas, a renderer, small-sample stats, a linter and an Every Eval Ever exporter (STANDARD.md is the source of truth).
 
 ## Status
-Updated 2026-10-09. State: active, v0.2.0. Next: see NEXT.md.
+Updated 2026-10-09. State: active, v0.3.0. Next: see NEXT.md.
 
 ## Latest result
 bench-kit is tooling, not a bench, so it has no runs. The standard it enforces is in STANDARD.md.
@@ -15,6 +15,7 @@ per task x subject x repeat. bench-kit then:
 - `bench-kit stats`: computes means, 95% intervals (t, or Wilson for 0/1), paired per-task
   comparisons with wins/ties/losses and a sign test, error counts and token totals from
   samples.jsonl into the manifest. The task is the unit; repeats are averaged within a task first.
+  Optional: cluster-robust intervals (`stats.cluster_by`) and per-subject task and repeat counts.
 - `bench-kit render`: regenerates the README latest block (between the `bench:latest` markers),
   RESULTS.md and runs/INDEX.md from all manifests.
 - `bench-kit lint`: checks the repo against the standard, rules BL001-BL010 (`bench-kit rules`).
@@ -24,7 +25,7 @@ per task x subject x repeat. bench-kit then:
 ## Run it
 ```bash
 # from a bench repo checkout
-uv tool install git+https://github.com/aaronjmars/bench-kit@v0.2.0   # or: pipx install git+https://...
+uv tool install git+https://github.com/aaronjmars/bench-kit@v0.3.0   # or: pipx install git+https://...
 bench-kit stats && bench-kit render && bench-kit lint
 bench-kit export-eee <run-id> --out eee-export --org "Your Org"
 ```
@@ -32,7 +33,7 @@ bench-kit export-eee <run-id> --out eee-export --org "Your Org"
 In any repo's GitHub Actions CI:
 ```yaml
 - uses: actions/checkout@v4
-- uses: aaronjmars/bench-kit@v0.2.0
+- uses: aaronjmars/bench-kit@v0.3.0
   with:
     args: --warn-only   # drop once the repo is migrated
 ```

@@ -78,6 +78,24 @@ def score_details(sd: dict) -> dict:
     return out
 
 
+def instance_output(row: dict) -> dict:
+    """EEE output object for a single_turn row: the sample's own output when it has one
+    (a string, a list of strings, or {"raw", "reasoning_trace"}), else the minimal valid {"raw": []}."""
+    o = row.get("output")
+    if isinstance(o, str):
+        return {"raw": [o]}
+    if isinstance(o, list):
+        return {"raw": [str(x) for x in o]}
+    if isinstance(o, dict):
+        raw = o.get("raw")
+        out = {"raw": [raw] if isinstance(raw, str) else [str(x) for x in raw or []]}
+        rt = o.get("reasoning_trace")
+        if rt is not None:
+            out["reasoning_trace"] = [rt] if isinstance(rt, str) else [str(x) for x in rt]
+        return out
+    return {"raw": []}
+
+
 def export(run: Run, out_dir: Path, validate: bool = True, org: str | None = None) -> list[Path]:
     """org overrides the manifest's source_organization.name; EEE requires a value, so it falls back to "unknown"."""
     m = run.manifest
@@ -141,6 +159,7 @@ def export(run: Run, out_dir: Path, validate: bool = True, org: str | None = Non
             agg["source_metadata"]["source_organization_url"] = src_org["url"]
         if rows:
             inst = []
+            interaction = m.get("interaction_type", "agentic")
             for x in rows:
                 ev = x.get("evaluation") or {}
                 tu = x.get("token_usage")
@@ -151,11 +170,12 @@ def export(run: Run, out_dir: Path, validate: bool = True, org: str | None = Non
                     "evaluation_name": ev_name(pm),
                     "sample_id": f"{x['sample_id']}#{x['repeat']}",
                     "sample_hash": x.get("sample_hash"),
-                    "interaction_type": m.get("interaction_type", "agentic"),
+                    "interaction_type": interaction,
                     "input": {"raw": "", "reference": []},
                     "answer_attribution": [],
-                    "output": None,
-                    "messages": [],
+                    # EEE: single_turn needs an output object and null messages; multi_turn/agentic the reverse
+                    "output": instance_output(x) if interaction == "single_turn" else None,
+                    "messages": None if interaction == "single_turn" else [],
                     "evaluation": {"score": ev.get("score") if ev.get("score") is not None else 0.0, "is_correct": bool(ev.get("is_correct"))},
                     "error": None if not x.get("error") else f"{x['error'].get('source')}: {x['error'].get('message')}",
                     "metadata": {"task_id": str(x["sample_id"]), "repeat": str(x["repeat"])},

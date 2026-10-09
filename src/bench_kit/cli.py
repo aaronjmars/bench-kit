@@ -32,7 +32,12 @@ def cmd_stats(a) -> int:
             continue
         if r.samples is None:
             continue
-        new = stats.apply(r.manifest, r.samples)
+        try:
+            new = stats.apply(r.manifest, r.samples)
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"{r.manifest_path}: cannot compute stats: {e}", file=sys.stderr)
+            rc = 1
+            continue
         text = dump_json(new)
         if r.manifest_path.read_text() != text:
             r.manifest_path.write_text(text)

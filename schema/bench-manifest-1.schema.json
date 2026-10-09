@@ -56,7 +56,12 @@
         "url": {"type": "array", "items": {"type": "string"}},
         "version": {"type": "string", "pattern": "^\\d+-[A-Z]$"},
         "n_planned": {"type": "integer", "minimum": 0},
-        "n_completed": {"type": "integer", "minimum": 0},
+        "n_completed": {"type": "integer", "minimum": 0, "description": "Tasks completed. With n_completed_by_subject: distinct tasks across all subjects."},
+        "n_completed_by_subject": {
+          "type": "object",
+          "description": "Optional per-subject task counts, for subjects that legitimately have different task sets. Subjects not listed use n_completed.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
         "ids_hash": {"type": ["string", "null"]},
         "split": {"type": ["string", "null"]}
       }
@@ -97,7 +102,23 @@
       "properties": {
         "planned": {"type": "integer", "minimum": 1},
         "completed": {"type": "integer", "minimum": 0},
-        "aggregation": {"enum": ["mean", "pass@k", "pass^k", "best@k", "median", "olympic"]}
+        "aggregation": {"enum": ["mean", "pass@k", "pass^k", "best@k", "median", "olympic"]},
+        "completed_by_subject": {
+          "type": "object",
+          "description": "Optional per-subject completed repeats, so one run can hold configs with different repeat counts. Subjects not listed use completed.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "stats": {
+      "type": ["object", "null"],
+      "description": "Options for bench-kit stats.",
+      "properties": {
+        "cluster_by": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Cluster tasks for standard errors and intervals: 'cluster' uses each sample row's cluster field, any other value names a sample metadata key ('metadata.' prefix optional), e.g. date or author. Unset: tasks are independent."
+        }
       }
     },
     "llm_scoring": {
@@ -165,6 +186,11 @@
           "losses": {"type": ["integer", "null"]},
           "sign_test_p": {"type": ["number", "null"]},
           "method": {"type": ["string", "null"]},
+          "unpaired": {
+            "type": ["object", "null"],
+            "description": "Written by bench-kit stats when the subjects do not share every task: tasks only one side has, left out of the pairing.",
+            "properties": {"baseline": {"type": "integer", "minimum": 0}, "candidate": {"type": "integer", "minimum": 0}}
+          },
           "note": {"type": ["string", "null"]}
         }
       }
@@ -253,7 +279,8 @@
           }
         },
         "standard_deviation": {"type": ["number", "null"]},
-        "num_samples": {"type": "integer", "minimum": 0}
+        "num_samples": {"type": "integer", "minimum": 0},
+        "num_clusters": {"type": "integer", "minimum": 0, "description": "Clusters behind a clustered standard error (stats.cluster_by)."}
       }
     },
     "score_details": {

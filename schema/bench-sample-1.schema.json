@@ -10,6 +10,10 @@
     "sample_hash": {"type": ["string", "null"]},
     "subject": {"type": "string", "minLength": 1},
     "repeat": {"type": "integer", "minimum": 0},
+    "cluster": {
+      "type": ["string", "number", "null"],
+      "description": "Optional cluster label (a date, an author, a source). Used when the manifest sets stats.cluster_by to 'cluster'. Same for every row of a task."
+    },
     "evaluation": {
       "type": "object",
       "required": ["score"],
@@ -45,6 +49,21 @@
         "message": {"type": "string"}
       }
     },
-    "metadata": {"type": ["object", "null"]}
+    "metadata": {"type": ["object", "null"]},
+    "output": {
+      "description": "Optional model output; export-eee uses it for single_turn runs. A string, a list of strings, or {raw, reasoning_trace}.",
+      "anyOf": [
+        {"type": ["null", "string"]},
+        {"type": "array", "items": {"type": "string"}},
+        {
+          "type": "object",
+          "required": ["raw"],
+          "properties": {
+            "raw": {"type": ["string", "array"], "items": {"type": "string"}},
+            "reasoning_trace": {"type": ["string", "array", "null"], "items": {"type": "string"}}
+          }
+        }
+      ]
+    }
   }
 }

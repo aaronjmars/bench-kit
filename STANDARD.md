@@ -1,4 +1,4 @@
-# Bench standard v2.1 (bench-kit 0.2.0)
+# Bench standard v2.2 (bench-kit 0.3.0)
 
 One shape for every bench repo: how runs are recorded, checked and reported,
 whatever the bench measures (models, agent harnesses, prompts, CI runners,
@@ -12,7 +12,12 @@ tau2-bench, METR, OpenAI frontier-evals, HELM, lm-evaluation-harness, Every
 Eval Ever, MLPerf, HAL, Epoch AI, BetterBench, ABC and Anthropic's error-bars
 paper record results. v2.1 renames leaf fields to Every Eval Ever (EEE) 0.3.0
 names wherever an equivalent exists, so `bench-kit export-eee` is a straight
-mapping. Sources at the end.
+mapping. v2.2 (bench-kit 0.3.0) adds optional clustered intervals
+(`stats.cluster_by`), per-subject task and repeat counts
+(`source_data.n_completed_by_subject`, `repeats.completed_by_subject`), an
+optional `output` on sample rows for single_turn EEE export, and
+significant-figure number formatting in generated files; every v2.1 manifest
+stays valid and keeps `bench-manifest/1`. Sources at the end.
 
 Note: every number, id and hash in the examples below is made up to show the
 shape. They are not results.
@@ -104,6 +109,10 @@ Extra sections may follow Layout.
 - Corrections: none
 ```
 
+Numbers in generated files: values of 1 or more (and 0) use 3 decimals with
+trailing zeros dropped (money 2 decimals); values below 1 use 3 significant
+figures, so a cost of $0.00042 per task prints as `$0.00042`, never `$0.00`.
+
 ## 4. Manifest (`runs/<id>/manifest.json`, schema `bench-manifest/1`)
 
 EEE names are used for: `eval_library`, `source_data.dataset_name`,
@@ -116,7 +125,7 @@ confidence_level, method}, standard_deviation, num_samples}}` and
 `token_usage {input_tokens, output_tokens, total_tokens, input_tokens_cache_read,
 input_tokens_cache_write, reasoning_tokens}`.
 
-Ours (no EEE equivalent): subjects, repeats, comparisons, errors, cost,
+Ours (no EEE equivalent): subjects, repeats, stats, comparisons, errors, cost,
 decision_rule, verdict, status, compared_with, raw, corrections.
 `source_organization {name, url}` (optional) feeds EEE `source_metadata` on export.
 
@@ -240,6 +249,28 @@ the verdict also sets `status` or adds a new run that sets `superseded_by`.
 
 **Suppressions** for one manifest: `"lint_ignore": [{"rule": "BL007", "reason": "..."}]`.
 
+**Uneven subjects and repeats** (optional). When subjects legitimately have
+different task sets (e.g. a different number of items per source) or one run
+holds configs with different repeat counts, declare it instead of suppressing
+BL004:
+
+```json
+"source_data": {"dataset_name": "example-items", "version": "1-A", "n_planned": 40, "n_completed": 40,
+                "n_completed_by_subject": {"source-a": 25, "source-b": 15}},
+"repeats": {"planned": 3, "completed": 3, "completed_by_subject": {"config-fast": 1}}
+```
+
+Subjects not listed use `n_completed` / `repeats.completed`; with per-subject
+counts, `n_completed` is the number of distinct tasks across all subjects.
+Comparisons pair only the tasks both subjects have: `num_samples` is the number
+of shared tasks and `bench-kit stats` writes `"unpaired": {"baseline": k,
+"candidate": j}` when either side had tasks the other lacks. Per-task values
+still average a subject's own repeats first. BL005 counts the repeats of the
+subjects in the comparisons that back the verdict.
+
+**Clustered intervals** (optional): `"stats": {"cluster_by": "date"}`. See
+section 7 rule 11.
+
 ## 5. Per-task file (`runs/<id>/samples.jsonl`, schema `bench-sample/1`)
 
 One JSON line per task x subject x repeat (EEE instance names where they exist):
@@ -259,7 +290,15 @@ One JSON line per task x subject x repeat (EEE instance names where they exist):
 - `error` is null or `{"source": "infra|agent|judge|task", "type", "message"}`.
   With `errors.counted_as: zero` an errored row with a null score counts as 0
   (and not correct); with `excluded` it is dropped.
-- Row count per subject must equal `n_completed x repeats.completed`.
+- Row count per subject must equal `n_completed x repeats.completed`, or that
+  subject's entries in `source_data.n_completed_by_subject` and
+  `repeats.completed_by_subject` when the manifest declares them.
+- `cluster` (optional): a cluster label (string or number) used when the
+  manifest sets `stats.cluster_by` to `"cluster"`. Same value for every row of a task.
+- `output` (optional): the model's answer, used by `export-eee` for
+  `interaction_type: single_turn` runs (EEE requires an output object there): a
+  string, a list of strings, or `{"raw": [...], "reasoning_trace": [...]}`.
+  Rows without it export the minimal valid `{"raw": []}`.
 - Keep this file even when transcripts are too big or sensitive to commit.
 
 ## 6. METHOD.md headings (benchmark card)
@@ -313,6 +352,22 @@ comparison must list what differs (`compared_with`).
 9. Very small task sets (n <= 10): always show W/T/L. 6 of 6 wins is p = 0.03 on
    a sign test; 5 of 6 is not significant.
 10. Report cost the same way: per run, per task, and per success.
+11. Clustered tasks (optional). When tasks are not independent (several items
+    from the same day, author, repo or source move together), set
+    `"stats": {"cluster_by": "<key>"}` in the manifest. `"cluster"` reads each
+    sample row's `cluster` field; any other value names a key in the row's
+    `metadata` (a `metadata.` prefix is accepted), e.g. `date` or `author`. A
+    task must sit in exactly one cluster; rows without a value (e.g. errored
+    rows) take their task's value from its other rows, and a task with no value
+    at all is an error. Then, for every metric and every paired comparison,
+    `bench-kit stats` uses the cluster-robust (CR1) standard error over the
+    per-task values (or per-task differences):
+    `se^2 = G / (G - 1) * sum_g (sum_{i in g} (x_i - mean))^2 / n^2`, with G
+    clusters, and a t interval with G - 1 df, clipped to the metric range. Wilson
+    is not used when clustered (it assumes independence). Fewer than 2 clusters
+    gives no interval. `uncertainty.num_clusters` records G; W/T/L and the sign
+    test stay per task. With every task in its own cluster this equals the
+    unclustered t interval. Unset `cluster_by` (the default) changes nothing.
 
 ## 8. Shared conventions
 
@@ -342,7 +397,7 @@ Rules (code, level):
 - BL001 error: manifest or samples fail JSON Schema, duplicate run id, or id differs from directory
 - BL002 error: required file or README section missing; Status has no date; latest markers missing
 - BL003 error: generated files out of date (render would change them)
-- BL004 error: samples row count or recomputed numbers disagree with the manifest
+- BL004 error: samples row count per subject (section 5) or recomputed numbers disagree with the manifest, or stats cannot be computed (e.g. a task in two clusters)
 - BL005 error: verdict SWITCH/WINNER without a primary-metric comparison whose CI excludes 0, or with repeats < 2
 - BL006 error: em or en dash in any markdown file or manifest
 - BL007 warn: model id is an alias, or harness version missing without `version_unknown_reason`
