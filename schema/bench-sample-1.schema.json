@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/aaronjmars/bench-kit/schema/bench-sample-1.schema.json",
+  "title": "bench-sample/1",
+  "description": "One line of runs/<id>/samples.jsonl: one task x subject x repeat. Leaf names follow Every Eval Ever 0.3.0 instance rows where an equivalent exists.",
+  "type": "object",
+  "required": ["sample_id", "subject", "repeat", "evaluation", "error"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "sample_hash": {"type": ["string", "null"]},
+    "subject": {"type": "string", "minLength": 1},
+    "repeat": {"type": "integer", "minimum": 0},
+    "evaluation": {
+      "type": "object",
+      "required": ["score"],
+      "properties": {
+        "score": {"type": ["number", "null"]},
+        "is_correct": {"type": ["boolean", "null"]},
+        "num_turns": {"type": ["integer", "null"], "minimum": 0},
+        "tool_calls_count": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "token_usage": {
+      "type": ["object", "null"],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "input_tokens_cache_read": {"type": ["integer", "null"], "minimum": 0},
+        "input_tokens_cache_write": {"type": ["integer", "null"], "minimum": 0},
+        "reasoning_tokens": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "performance": {
+      "type": ["object", "null"],
+      "properties": {"latency_ms": {"type": ["number", "null"], "minimum": 0}}
+    },
+    "cost_usd": {"type": ["number", "null"]},
+    "error": {
+      "type": ["object", "null"],
+      "required": ["source", "message"],
+      "properties": {
+        "source": {"enum": ["infra", "agent", "judge", "task"]},
+        "type": {"type": ["string", "null"]},
+        "message": {"type": "string"}
+      }
+    },
+    "metadata": {"type": ["object", "null"]}
+  }
+}
