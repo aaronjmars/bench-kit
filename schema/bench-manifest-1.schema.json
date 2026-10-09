@@ -317,7 +317,8 @@
         },
         "standard_deviation": {"type": ["number", "null"]},
         "num_samples": {"type": "integer", "minimum": 0},
-        "num_clusters": {"type": "integer", "minimum": 0, "description": "Clusters behind a clustered standard error (stats.cluster_by)."}
+        "num_clusters": {"type": "integer", "minimum": 0, "description": "Clusters behind a clustered standard error (stats.cluster_by)."},
+        "no_interval_reason": {"type": "string", "description": "Why there is no confidence_interval or standard_error: too few tasks or clusters, or every per-task value or paired diff equal, where a zero-width interval would read as perfect certainty. Written by bench-kit stats."}
       }
     },
     "score_details": {

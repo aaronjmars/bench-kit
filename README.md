@@ -19,7 +19,7 @@ per task x subject x repeat. bench-kit then:
   per-metric task subsets (`task_filter`, e.g. recall over positive tasks only).
 - `bench-kit render`: regenerates the README latest block (between the `bench:latest` markers),
   RESULTS.md and runs/INDEX.md from all manifests.
-- `bench-kit lint`: checks the repo against the standard, rules BL001-BL010 (`bench-kit rules`).
+- `bench-kit lint`: checks the repo against the standard, rules BL001-BL011 (`bench-kit rules`).
 - `bench-kit export-eee <run> [--org NAME]`: writes Every Eval Ever 0.3.0 aggregate + samples
   files and validates them against the vendored EEE schemas.
 

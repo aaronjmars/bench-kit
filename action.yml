@@ -1,5 +1,5 @@
 name: bench-kit lint
-description: Check a bench repo against the bench standard (bench-kit lint, rules BL001-BL010).
+description: Check a bench repo against the bench standard (bench-kit lint, rules BL001-BL011).
 inputs:
   args:
     description: Extra arguments for bench-kit lint, e.g. --warn-only

@@ -132,7 +132,8 @@ confidence_level, method}, standard_deviation, num_samples}}` and
 input_tokens_cache_write, reasoning_tokens}`.
 
 Ours (no EEE equivalent): subjects, repeats, stats, comparisons, errors, cost,
-decision_rule, verdict, status, compared_with, raw, corrections.
+decision_rule, verdict, status, compared_with, raw, corrections, and
+`uncertainty.num_clusters` / `uncertainty.no_interval_reason` (section 7 rules 11 and 13).
 `source_organization {name, url}` (optional) feeds EEE `source_metadata` on export.
 
 ```json
@@ -431,6 +432,17 @@ comparison must list what differs (`compared_with`).
     kept tasks both subjects have). Always read such a metric with its n; a
     filter that keeps 2 tasks gives a very wide interval. Decide the filter
     before the run, like the decision rule (rule 7): it is part of the metric.
+13. No zero-width intervals. When every per-task value (or every paired diff)
+    is equal, the standard error is 0 and a t interval would be `[x, x]`, which
+    reads as perfect certainty even on 2 tasks. `bench-kit stats` then writes no
+    `confidence_interval` and no `standard_error`, and sets
+    `uncertainty.no_interval_reason` (e.g. `"all 2 paired diffs equal"`). The
+    same field names the other no-interval cases: `"1 task"`, `"1 shared task"`,
+    `"1 cluster"`, and `"standard error is 0"` (clustered values that cancel
+    out). Generated files print `[CI n/a: <reason>]`. A comparison without an
+    interval never backs a SWITCH or WINNER (rule 8, BL005): read it with W/T/L
+    and the sign test, and add tasks for a real interval. Wilson intervals are
+    never zero width and are kept.
 
 ## 8. Shared conventions
 
@@ -461,12 +473,13 @@ Rules (code, level):
 - BL002 error: required file or README section missing; Status has no date; latest markers missing
 - BL003 error: generated files out of date (render would change them)
 - BL004 error: samples row count per subject (section 5) or recomputed numbers disagree with the manifest (for metric subsets also `num_samples` and the `subset` counts), or stats cannot be computed (e.g. a task in two clusters, or two values for a `task_filter` field)
-- BL005 error: verdict SWITCH/WINNER without a primary-metric comparison whose CI excludes 0, or with repeats < 2
+- BL005 error: verdict SWITCH/WINNER without a primary-metric comparison whose CI excludes 0 (a missing or zero-width CI does not count), or with repeats < 2
 - BL006 error: em or en dash in any markdown file or manifest
 - BL007 warn: model id is an alias, or harness version missing without `version_unknown_reason`
 - BL008 warn: `revision.dirty` true without a correction note
 - BL009 warn: task-set version not in the METHOD.md changelog
 - BL010 warn: leftover TODO in docs, or `raw.kept` false without location or reason
+- BL011 warn: a stored confidence interval has zero width (lower equals upper), e.g. from an older bench-kit or a hand-written external metric (section 7 rule 13)
 
 Suppress in a markdown file with `<!-- bench-lint: ignore BL0xx <reason> -->`,
 in a manifest with `lint_ignore`, or repo-wide in `.bench-lint-ignore`.
