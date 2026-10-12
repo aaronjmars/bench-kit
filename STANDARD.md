@@ -1,4 +1,4 @@
-# Bench standard v2.3 (bench-kit 0.4.0)
+# Bench standard v2.4 (bench-kit 0.5.0)
 
 One shape for every bench repo: how runs are recorded, checked and reported,
 whatever the bench measures (models, agent harnesses, prompts, CI runners,
@@ -23,6 +23,11 @@ per-metric task subsets (`metric_config.<id>.task_filter`,
 recall over positive tasks or false alarms over clean controls is computed,
 paired and linted by bench-kit instead of by each bench; a metric without them
 works as before, and every v2.2 manifest stays valid as `bench-manifest/1`.
+v2.4 (bench-kit 0.5.0) drops zero-width intervals: when every per-task value or
+paired diff is equal (or there is 1 task, 1 shared task or 1 cluster), stats
+leaves out the interval and writes `uncertainty.no_interval_reason`, render
+prints `[CI n/a: <reason>]`, and lint warns on a stored zero-width interval
+(BL011); every v2.3 manifest stays valid as `bench-manifest/1`.
 Sources at the end.
 
 Note: every number, id and hash in the examples below is made up to show the
