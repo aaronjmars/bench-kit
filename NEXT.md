@@ -1,6 +1,6 @@
 # Next
 
-Updated 2026-10-12.
+Updated 2026-10-13.
 
 1. Paired Bayes interval for small-n pass rates (Bowyer et al. 2025), next to the paired t.
 2. Converters into manifest + samples: Harbor job/trial `result.json`, and EVMbench-style per-audit `grade.json` results.
@@ -10,6 +10,9 @@ Updated 2026-10-12.
 6. Lint tolerance relative to the metric scale, so metrics with very small values are checked as tightly as large ones.
 7. export-eee: carry sample transcripts into EEE `messages` for multi_turn and agentic runs (today an empty list).
 8. Task filters: a negated match (`not_in`) and a lint warning when a filter keeps no task, if a bench needs them.
+
+Done in 0.5.1 (2026-10-13): tiny numbers print in e-notation below 1e-6 and a sign-test p below
+0.001 prints as `p<0.001` (a 520-task comparison printed p as a 150-digit decimal).
 
 Done in 0.5.0 (2026-10-12): no zero-width intervals (`uncertainty.no_interval_reason`,
 render `[CI n/a: <reason>]`, lint BL011).
