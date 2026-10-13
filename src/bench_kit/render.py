@@ -34,13 +34,24 @@ def fixed(x: float, decimals: int, signed: bool = False, strip: bool = True, min
     return s
 
 
+TINY = 1e-6
+
+
 def num(x, signed: bool = False) -> str:
     if x is None:
         return "n/a"
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         return str(x)
+    if x != 0 and math.isfinite(x) and abs(x) < TINY:
+        # below 1e-6 fixed notation runs to dozens of zeros; 3 significant figures in e-notation
+        return f"{x:+.{SIG - 1}e}" if signed else f"{x:.{SIG - 1}e}"
     s = fixed(x, 3, signed)
     return "0" if s in ("+0", "-0", "") else s
+
+
+def p_text(p: float) -> str:
+    """Sign-test p as reported in papers: p<0.001 below that, else the plain value."""
+    return "p<0.001" if p < 0.001 else f"p={num(p)}"
 
 
 def ci_text(unc: dict | None) -> str:
@@ -135,7 +146,7 @@ def comparison_line(c: dict) -> str:
     if c.get("wins") is not None:
         wtl = f", W/T/L {c['wins']}/{c['ties']}/{c['losses']}"
         if c.get("sign_test_p") is not None:
-            wtl += f" (sign test p={num(c['sign_test_p'])})"
+            wtl += f" (sign test {p_text(c['sign_test_p'])})"
     note = f". {c['note']}" if c.get("note") else ""
     up = c.get("unpaired") or {}
     shared = ""

@@ -1,4 +1,4 @@
-# Bench standard v2.4 (bench-kit 0.5.0)
+# Bench standard v2.4 (bench-kit 0.5.1)
 
 One shape for every bench repo: how runs are recorded, checked and reported,
 whatever the bench measures (models, agent harnesses, prompts, CI runners,
@@ -122,7 +122,9 @@ Extra sections may follow Layout.
 
 Numbers in generated files: values of 1 or more (and 0) use 3 decimals with
 trailing zeros dropped (money 2 decimals); values below 1 use 3 significant
-figures, so a cost of $0.00042 per task prints as `$0.00042`, never `$0.00`.
+figures, so a cost of $0.00042 per task prints as `$0.00042`, never `$0.00`. Values
+below 1e-6 print in e-notation with 3 significant figures (`2.35e-137`), and a sign-test
+p below 0.001 prints as `p<0.001` (bench-kit 0.5.1).
 
 ## 4. Manifest (`runs/<id>/manifest.json`, schema `bench-manifest/1`)
 
