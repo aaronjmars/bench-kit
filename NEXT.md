@@ -1,6 +1,6 @@
 # Next
 
-Updated 2026-10-13.
+Updated 2026-10-26.
 
 1. Paired Bayes interval for small-n pass rates (Bowyer et al. 2025), next to the paired t.
 2. Converters into manifest + samples: Harbor job/trial `result.json`, and EVMbench-style per-audit `grade.json` results.
@@ -10,6 +10,13 @@ Updated 2026-10-13.
 6. Lint tolerance relative to the metric scale, so metrics with very small values are checked as tightly as large ones.
 7. export-eee: carry sample transcripts into EEE `messages` for multi_turn and agentic runs (today an empty list).
 8. Task filters: a negated match (`not_in`) and a lint warning when a filter keeps no task, if a bench needs them.
+
+Done in 0.6.0 (2026-10-26): sweep hygiene, STANDARD.md section 11. Tracked sweep ledger
+`data/sweeps/<sweep-id>.json` (schema `bench-sweep/1`, `bench-kit ledger`); `bench-kit check-run`
+marks provider auth failures (401, revoked token, invalid key) as errors and stops a sweep after N
+in a row, plus a required-files check; `bench-kit scrub` replaces secret values named by env var or
+values file and `--check` verifies none is left; lint BL012 (run record or ledger dir gitignored)
+and BL013 (auth-error rows in a complete run), and BL001 validates `bench-sweep/1` ledgers.
 
 Done in 0.5.1 (2026-10-13): tiny numbers print in e-notation below 1e-6 and a sign-test p below
 0.001 prints as `p<0.001` (a 520-task comparison printed p as a 150-digit decimal).

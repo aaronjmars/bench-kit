@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/aaronjmars/bench-kit/schema/bench-sweep-1.schema.json",
+  "title": "bench-sweep/1",
+  "description": "A sweep ledger, data/sweeps/<sweep-id>.json: one record per trial with its verdict, never outputs or transcripts. Tracked in git.",
+  "type": "object",
+  "required": ["schema_version", "sweep_id", "started_at", "status", "runs", "records"],
+  "properties": {
+    "schema_version": {"const": "bench-sweep/1"},
+    "sweep_id": {"type": "string", "minLength": 1},
+    "bench": {"type": ["string", "null"]},
+    "started_at": {"type": "string"},
+    "updated_at": {"type": ["string", "null"]},
+    "status": {"enum": ["running", "finished", "stopped", "halted"]},
+    "halted": {"type": ["string", "null"], "description": "Why the sweep stopped early, e.g. 3 consecutive auth errors."},
+    "note": {"type": ["string", "null"]},
+    "runs": {"type": "array", "items": {"type": "string"}, "description": "Run ids (directories under runs/) this sweep wrote."},
+    "counts": {
+      "type": "object",
+      "properties": {
+        "records": {"type": "integer", "minimum": 0},
+        "scored": {"type": "integer", "minimum": 0},
+        "errored": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "auth_errors": {"type": "integer", "minimum": 0}
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sample_id", "subject", "status"],
+        "properties": {
+          "run_id": {"type": ["string", "null"]},
+          "sample_id": {"type": "string", "minLength": 1},
+          "subject": {"type": "string", "minLength": 1},
+          "repeat": {"type": ["integer", "null"], "minimum": 0},
+          "status": {"enum": ["scored", "errored", "skipped"]},
+          "score": {"type": ["number", "null"]},
+          "is_correct": {"type": ["boolean", "null"]},
+          "cost_usd": {"type": ["number", "null"]},
+          "error": {
+            "type": ["object", "null"],
+            "required": ["message"],
+            "properties": {
+              "source": {"type": ["string", "null"]},
+              "type": {"type": ["string", "null"]},
+              "message": {"type": "string"}
+            }
+          },
+          "note": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}
