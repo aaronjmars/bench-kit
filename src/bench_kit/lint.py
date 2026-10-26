@@ -1,8 +1,9 @@
-"""bench-lint: rules BL001-BL011 from STANDARD.md section 9."""
+"""bench-lint: rules BL001-BL013 from STANDARD.md section 9."""
 
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from jsonschema import Draft7Validator
 
-from . import render, stats
+from . import ledger, render, stats
 from .io import Run, discover, load_schema
 
 RULES = {
@@ -25,6 +26,8 @@ RULES = {
     "BL009": ("warning", "task-set version missing from METHOD.md changelog"),
     "BL010": ("warning", "leftover TODO, or raw data not kept without location or reason"),
     "BL011": ("warning", "stored confidence interval has zero width (lower equals upper)"),
+    "BL012": ("warning", "a path that must be tracked is gitignored (run manifest or samples, or the data/sweeps/ ledger dir)"),
+    "BL013": ("warning", "auth-error rows (error.type auth) in a run whose status is complete"),
 }
 REQUIRED_FILES = ["README.md", "METHOD.md", "NEXT.md", "RESULTS.md", "runs/INDEX.md"]
 README_SECTIONS = ["Status", "Latest result", "How it works", "Run it", "Layout"]
@@ -144,6 +147,20 @@ class Linter:
                         self.add("BL001", r.samples_path, f"row {i}: {errs[0].message}", i)
             if bad > 20:
                 self.add("BL001", r.samples_path, f"{bad - 20} more invalid rows not shown")
+        lv = Draft7Validator(load_schema("bench-sweep-1.schema.json"))
+        for p in sorted((self.root / ledger.LEDGER_DIR).glob("*.json")):
+            try:
+                data = json.loads(p.read_text())
+            except json.JSONDecodeError as e:
+                self.add("BL001", p, f"invalid JSON: {e.msg} (line {e.lineno})")
+                continue
+            if not isinstance(data, dict) or data.get("schema_version") != ledger.SCHEMA:
+                continue  # a bench's own ledger format; only bench-sweep/1 files are checked
+            for e in sorted(lv.iter_errors(data), key=lambda e: list(e.absolute_path))[:20]:
+                where = "/".join(str(x) for x in e.absolute_path) or "(root)"
+                self.add("BL001", p, f"{where}: {e.message}")
+            if data.get("sweep_id") and data["sweep_id"] != p.stem:
+                self.add("BL001", p, f"sweep_id {data['sweep_id']!r} differs from file name {p.stem!r}")
 
     def bl002(self):
         for f in REQUIRED_FILES:
@@ -336,6 +353,32 @@ class Linter:
                         " (all per-task values or paired diffs equal); run bench-kit stats, or drop the interval and set"
                         " uncertainty.no_interval_reason",
                     )
+
+    def bl012(self):
+        probe = (ledger.LEDGER_DIR / "probe.json").as_posix()
+        want = {probe: f"{ledger.LEDGER_DIR.as_posix()}/"}
+        for r in self.runs:
+            for p in (r.manifest_path, r.samples_path):
+                if p.exists():
+                    want[self.rel(p)] = self.rel(p)
+        hit = ledger.ignored(self.root, want)
+        for path in hit or []:
+            if path == probe:
+                self.add("BL012", want[path], "sweep ledgers here are gitignored and would be lost; track data/sweeps/, ignore raw transcripts")
+            else:
+                self.add("BL012", want.get(path, path), "run record is gitignored; commit manifest.json and samples.jsonl, ignore only raw files")
+
+    def bl013(self):
+        for r in self.runs:
+            if r.manifest.get("status") != "complete" or not r.samples:
+                continue
+            n = sum(1 for x in r.samples if ((x.get("error") or {}).get("type") or "") == "auth")
+            if n:
+                self.add(
+                    "BL013",
+                    r.samples_path,
+                    f"{n} row(s) failed on auth (revoked or invalid key, 401) in a run marked complete; re-run them or set status partial",
+                )
 
     def run(self) -> list[Finding]:
         for rule in sorted(RULES):

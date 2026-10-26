@@ -1,4 +1,4 @@
-# Bench standard v2.4 (bench-kit 0.5.1)
+# Bench standard v2.5 (bench-kit 0.6.0)
 
 One shape for every bench repo: how runs are recorded, checked and reported,
 whatever the bench measures (models, agent harnesses, prompts, CI runners,
@@ -28,6 +28,13 @@ paired diff is equal (or there is 1 task, 1 shared task or 1 cluster), stats
 leaves out the interval and writes `uncertainty.no_interval_reason`, render
 prints `[CI n/a: <reason>]`, and lint warns on a stored zero-width interval
 (BL011); every v2.3 manifest stays valid as `bench-manifest/1`.
+v2.5 (bench-kit 0.6.0) adds sweep hygiene (section 11): a tracked sweep ledger
+per sweep (`data/sweeps/<sweep-id>.json`, schema `bench-sweep/1`, `bench-kit
+ledger`), auth errors recorded as errors and a sweep stop after a few in a row
+(`bench-kit check-run`), and a secret scrub of run files after every trial
+(`bench-kit scrub`); lint warns when a run record or the ledger dir is
+gitignored (BL012) or a complete run holds auth-error rows (BL013). Manifests and
+samples are unchanged.
 Sources at the end.
 
 Note: every number, id and hash in the examples below is made up to show the
@@ -54,7 +61,8 @@ shape. They are not results.
 |---|---|---|
 | `runs/<id>/manifest.json` | the run (or a human right after) | Source of truth for one run. Section 4. Required. |
 | `runs/<id>/samples.jsonl` | the run | One row per task x subject x repeat. Section 5. Required when any metric is computed from samples. |
-| `runs/<id>/` other files | the run | Raw logs, transcripts, judge outputs, as the bench already writes them. If not committed, `raw.location` or `raw.reason` says why. |
+| `runs/<id>/` other files | the run | Raw logs, transcripts, judge outputs, as the bench already writes them. If not committed, `raw.location` or `raw.reason` says why. Gitignore only these raw files (e.g. `runs/*/raw/`), never `manifest.json` or `samples.jsonl` (BL012). |
+| `data/sweeps/<sweep-id>.json` | the sweep runner (`bench-kit ledger`) | Sweep ledger: one record per trial with its verdict. Tracked in git, never gitignored. Section 11. |
 | `README.md` | human + generated block | Fixed sections, section 2. |
 | `RESULTS.md` | **generated** | Every run, newest first, from manifests. Section 3. |
 | `runs/INDEX.md` | **generated** | One line per run: id, date, question, verdict, status. |
@@ -353,7 +361,10 @@ One JSON line per task x subject x repeat (EEE instance names where they exist):
   consistently within a run.
 - `error` is null or `{"source": "infra|agent|judge|task", "type", "message"}`.
   With `errors.counted_as: zero` an errored row with a null score counts as 0
-  (and not correct); with `excluded` it is dropped.
+  (and not correct); with `excluded` it is dropped. A trial that failed on
+  provider auth (section 11) gets `"type": "auth"` (usually `"source": "infra"`)
+  and a null score; it is re-run, and a run that still holds such rows is not
+  `complete` (BL013).
 - Row count per subject must equal `n_completed x repeats.completed`, or that
   subject's entries in `source_data.n_completed_by_subject` and
   `repeats.completed_by_subject` when the manifest declares them.
@@ -459,6 +470,7 @@ comparison must list what differs (`compared_with`).
 - Subject short form: `harness@version+model` (Harbor style), e.g. `omp@18.3.2+claude-haiku-5-5`.
 - Any number quoted outside the repo (tweet, blog, PR) carries run id and date.
 - Secrets come from a secret store at run time; never in repo, manifests, samples or logs.
+  Run files are scrubbed after every trial (section 11).
 - No em or en dashes anywhere.
 - GitHub: description = README one-liner; topic `bench`.
 
@@ -474,6 +486,12 @@ Commands:
 - `bench-kit lint [--warn-only]`: GitHub `::error file=..::` annotations in CI
 - `bench-kit export-eee <run> [--org NAME]`: EEE 0.3.0 aggregate + samples files,
   validated against the vendored EEE schemas
+- `bench-kit ledger <sweep-id> [--run ID] [--records FILE] [--status S]`: writes or
+  updates the tracked sweep ledger (section 11)
+- `bench-kit check-run <trial>... [--require GLOB] [--stop-after N]`: auth errors
+  and missing files in finished trials (section 11)
+- `bench-kit scrub <path>... --env NAME|GLOB [--values-file FILE] [--check]`:
+  replaces secret values in run files (section 11)
 
 Rules (code, level):
 - BL001 error: manifest or samples fail JSON Schema, duplicate run id, or id differs from directory
@@ -487,6 +505,8 @@ Rules (code, level):
 - BL009 warn: task-set version not in the METHOD.md changelog
 - BL010 warn: leftover TODO in docs, or `raw.kept` false without location or reason
 - BL011 warn: a stored confidence interval has zero width (lower equals upper), e.g. from an older bench-kit or a hand-written external metric (section 7 rule 13)
+- BL012 warn: a path that must be tracked is gitignored: a run's `manifest.json` or `samples.jsonl`, or the `data/sweeps/` ledger dir (checked with `git check-ignore`, so tracked files never count; skipped outside a git work tree). BL001 also checks every `data/sweeps/*.json` that declares `bench-sweep/1` against its schema and its file name
+- BL013 warn: a run with `status: complete` has sample rows with `error.type: "auth"` (section 11)
 
 Suppress in a markdown file with `<!-- bench-lint: ignore BL0xx <reason> -->`,
 in a manifest with `lint_ignore`, or repo-wide in `.bench-lint-ignore`.
@@ -505,6 +525,94 @@ Legacy repos start with `--warn-only` and switch to errors once migrated.
    nothing is lost; RESULTS.md becomes generated.
 5. Add the lint to CI with `--warn-only` first, then switch to errors once the
    repo is clean.
+
+## 11. Sweeps: ledger, auth errors, secrets (bench-kit 0.6.0)
+
+A sweep is one launch of the bench's runner over many trials (task x subject x
+repeat), often paid and often spread over several runs. Three rules keep a sweep
+from being lost, misread or leaking a key.
+
+**1. Persist the sweep ledger.** Raw transcripts may stay out of git
+(`runs/*/raw/` in `.gitignore`, kept elsewhere per `raw.location`), but each
+sweep's per-trial verdicts go to a tracked file, `data/sweeps/<sweep-id>.json`
+(schema `bench-sweep/1`), and are committed with the run records. A paid sweep
+whose only ledger sat in a gitignored folder cannot be re-read once that folder
+is gone. The ledger holds verdicts, never outputs or transcripts:
+
+```json
+{"schema_version": "bench-sweep/1", "sweep_id": "2026-01-15-ab-sweep", "bench": "example-bench",
+ "started_at": "2026-01-15T14:00:00Z", "updated_at": "2026-01-15T16:00:00Z",
+ "status": "halted", "halted": "3 consecutive auth errors on candidate", "note": null,
+ "runs": ["2026-01-15-summarizer-ab"],
+ "counts": {"records": 3, "scored": 1, "errored": 1, "skipped": 1, "auth_errors": 1},
+ "records": [
+   {"run_id": "2026-01-15-summarizer-ab", "sample_id": "task-0001", "subject": "baseline", "repeat": 1,
+    "status": "scored", "score": 3.2, "is_correct": null, "error": null},
+   {"run_id": "2026-01-15-summarizer-ab", "sample_id": "task-0001", "subject": "candidate", "repeat": 1,
+    "status": "errored", "score": null, "is_correct": null,
+    "error": {"source": "infra", "type": "auth", "message": "auth error: 401 Unauthorized"}},
+   {"run_id": null, "sample_id": "task-0002", "subject": "candidate", "repeat": 1,
+    "status": "skipped", "note": "sweep halted"}]}
+```
+
+- `status`: running | finished | stopped | halted; `halted` says why it stopped early.
+- Record `status`: scored | errored | skipped. Records may carry more keys (cost, judge
+  votes, a proof field); error messages are cut to 300 characters.
+- `bench-kit ledger <sweep-id> --run <run-id>` adds every sample row of a run;
+  `--records <file.jsonl>` adds records the runner wrote itself. Calls merge (the
+  newest record per run, task, subject and repeat wins, `started_at` is kept), so
+  a runner can call it after every trial and once more at the end with
+  `--status finished|stopped|halted`. It exits 2 if the ledger path is gitignored.
+  From Python: `bench_kit.ledger.write(root, sweep_id, runs=..., records=..., status=...)`.
+- A bench that already keeps its own ledger format there is left alone: lint
+  checks only files that declare `bench-sweep/1`.
+
+**2. Fail loud on auth errors.** A trial whose output shows a provider auth
+failure (HTTP 401, a revoked or expired token, an invalid API key, a lost
+login) measured nothing. A clean exit code does not make it a result: it is
+recorded as errored with `error.type: "auth"` and a null score, never scored,
+and re-run once the login is fixed. Every later trial on the same login fails the
+same way, so the sweep stops after a few in a row (default 3).
+
+- `bench-kit check-run <trial>...` scans each finished trial (a dir or a file, in
+  run order) for generic auth-error wording and prints one status per trial: `ok`,
+  `incomplete`, or `auth-error` with the file, line and a masked excerpt (long
+  token-like strings print as `<masked>`). Exit 0 clean, 1 a required file is
+  missing, 2 an auth error (mark the trial errored), 3 the streak reached
+  `--stop-after N` (stop the sweep). `--streak-file` keeps the streak between
+  calls when the runner checks one trial at a time; a clean trial resets it.
+  `--json` prints the same for scripts.
+- Agent transcripts of benches whose tasks call HTTP services can quote the
+  target's own 401 responses. Those benches point `--only` at the harness result
+  and error files, or `--skip` the transcript. `--pattern REGEX` adds a
+  bench-specific marker.
+- From Python: `bench_kit.runcheck.check_trial(...)`, `AuthStreak`, and
+  `sample_error(check)` for the samples row's `error` object.
+- A complete run must hold no auth-error rows (BL013): re-run them, or mark the run
+  `partial`.
+
+**3. Scrub secrets from run files.** Each trial scrubs its own files when it
+ends, and the sweep scrubs all its run dirs again at the end, since a trial killed
+mid-run skips its own scrub. The caller names the secrets; bench-kit never reads
+a secret store:
+
+```bash
+bench-kit scrub runs/<id> data/sweeps/<sweep-id>.json --env '*_API_KEY' --env '*_TOKEN'
+bench-kit scrub runs/<id> --values-file <(my-secret-tool export --names-and-values)   # NAME=value lines
+bench-kit scrub runs/<id> --env '*_API_KEY' --check   # completeness: exit 1 if any value is left
+```
+
+- Each value is replaced with `<redacted:NAME>`, longest first (a URL that holds a
+  key is masked whole), plus its JSON-escaped forms. Binary files are skipped, and
+  values shorter than 8 characters are skipped with a warning.
+- Completeness has two halves: `scrub --check` finds no value left, and
+  `check-run --require <glob>` finds every file the bench needs to judge the trial
+  later (result, log, transcript, verifier output, as the bench defines them).
+
+A sweep loop then reads, per trial: run it, `check-run` (2: write an auth error
+row, 3: stop), `scrub`, then `ledger`; at the end `scrub` and `scrub --check` over
+the sweep's run dirs, `ledger --status ...`, and commit `data/sweeps/` with the run
+records.
 
 ## Sources
 
