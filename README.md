@@ -53,7 +53,7 @@ bench-kit ledger <sweep-id> --run <run-id> --status finished && git add data/swe
 
 In any repo's GitHub Actions CI:
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
 - uses: aaronjmars/bench-kit@v0.6.0
   with:
     args: --warn-only   # drop once the repo is migrated
