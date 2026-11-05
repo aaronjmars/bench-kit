@@ -2,7 +2,7 @@
 A results standard for benchmark repos, with JSON Schemas, a renderer, small-sample stats, a linter and an Every Eval Ever exporter (STANDARD.md is the source of truth).
 
 ## Status
-Updated 2026-10-26. State: active, v0.6.0. Next: see NEXT.md.
+Updated 2026-10-26. State: active, v0.6.1. Next: see NEXT.md.
 
 ## Latest result
 bench-kit is tooling, not a bench, so it has no runs. The standard it enforces is in STANDARD.md.
@@ -38,7 +38,7 @@ Sweep hygiene (STANDARD.md section 11), for the bench's runner to call:
 ## Run it
 ```bash
 # from a bench repo checkout
-uv tool install git+https://github.com/aaronjmars/bench-kit@v0.6.0   # or: pipx install git+https://...
+uv tool install git+https://github.com/aaronjmars/bench-kit@v0.6.1   # or: pipx install git+https://...
 bench-kit stats && bench-kit render && bench-kit lint
 bench-kit export-eee <run-id> --out eee-export --org "Your Org"
 
@@ -54,7 +54,7 @@ bench-kit ledger <sweep-id> --run <run-id> --status finished && git add data/swe
 In any repo's GitHub Actions CI:
 ```yaml
 - uses: actions/checkout@v7
-- uses: aaronjmars/bench-kit@v0.6.0
+- uses: aaronjmars/bench-kit@v0.6.1
   with:
     args: --warn-only   # drop once the repo is migrated
 ```
