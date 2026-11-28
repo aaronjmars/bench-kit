@@ -299,7 +299,7 @@ those tasks:
   short text (EEE parameters are scalars) and adds `n_tasks_in_subset`.
 - They apply only to metrics computed from samples (`from` is not `external`).
 - These fields need bench-kit 0.4.0 or later: older versions ignore them and
-  compute the metric over every task. Pin `aaronjmars/bench-kit@v0.4.0` (or later)
+  compute the metric over every task. Pin `aeonfun/bench-kit@v0.4.0` (or later)
   before writing them.
 
 **Fixed words**
@@ -476,9 +476,9 @@ comparison must list what differs (`compared_with`).
 
 ## 9. bench-lint
 
-Lives in `aaronjmars/bench-kit` (public) with the JSON Schemas, the renderer,
+Lives in `aeonfun/bench-kit` (public) with the JSON Schemas, the renderer,
 the stats code and the linter. Bench repos call it from CI through the
-composite action `aaronjmars/bench-kit@<tag>`.
+composite action `aeonfun/bench-kit@<tag>`.
 
 Commands:
 - `bench-kit stats`: fills the stats-owned fields from samples.jsonl
