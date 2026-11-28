@@ -38,7 +38,7 @@ Sweep hygiene (STANDARD.md section 11), for the bench's runner to call:
 ## Run it
 ```bash
 # from a bench repo checkout
-uv tool install git+https://github.com/aaronjmars/bench-kit@v0.6.2   # or: pipx install git+https://...
+uv tool install git+https://github.com/aeonfun/bench-kit@v0.6.2   # or: pipx install git+https://...
 bench-kit stats && bench-kit render && bench-kit lint
 bench-kit export-eee <run-id> --out eee-export --org "Your Org"
 
@@ -54,7 +54,7 @@ bench-kit ledger <sweep-id> --run <run-id> --status finished && git add data/swe
 In any repo's GitHub Actions CI:
 ```yaml
 - uses: actions/checkout@v7
-- uses: aaronjmars/bench-kit@v0.6.2
+- uses: aeonfun/bench-kit@v0.6.2
   with:
     args: --warn-only   # drop once the repo is migrated
 ```
